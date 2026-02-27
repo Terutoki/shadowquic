@@ -140,8 +140,7 @@ impl SocksClient {
         let tcp = TcpStream::connect(self.addr.clone()).await?;
         tcp.set_nodelay(true)?;
 
-        // 由于环境兼容性问题，暂时禁用 TCP keepalive 设置
-        // 若需 keepalive，可使用 socket2 crate 或升级 Rust 版本
+        // 环境兼容性原因，暂不设置 keepalive
         let mut tcp = self.authenticate(tcp).await?;
 
         let socksreq = CmdReq {
@@ -153,21 +152,35 @@ impl SocksClient {
         socksreq.encode(&mut tcp).await?;
         let rep = CmdReply::decode(&mut tcp).await?;
         tracing::trace!("socks udp association established");
+
+        // 解析服务器返回的 UDP 中继地址
         let peer_addr = rep
             .bind_addr
             .to_socket_addrs()
             .expect("socks server return a unresolvable address")
             .next()
             .expect("socks server return a unresolvable address");
-        let bind_addr = if peer_addr.is_ipv4() {
+
+        // 获取 TCP 控制连接的远端 IP（即 Socks5 服务器 IP）
+        let server_ip = tcp.peer_addr()?.ip();
+
+        // 如果服务器返回通配 IP，则替换为服务器真实 IP；否则保持原样
+        let target_ip = if peer_addr.ip().is_unspecified() {
+            server_ip
+        } else {
+            peer_addr.ip()
+        };
+        let final_peer_addr = std::net::SocketAddr::new(target_ip, peer_addr.port());
+
+        let bind_addr = if final_peer_addr.is_ipv4() {
             "0.0.0.0:0"
         } else {
             "[::]:0"
         };
 
         let socket = UdpSocket::bind(bind_addr).await?;
-        socket.connect(peer_addr).await?;
-        let mut upstream = UdpSocksWrap(Arc::new(socket), OnceCell::new_with(Some(peer_addr)));
+        socket.connect(final_peer_addr).await?;
+        let mut upstream = UdpSocksWrap(Arc::new(socket), OnceCell::new_with(Some(final_peer_addr)));
 
         let upstream_clone = upstream.clone();
         let fut1 = async move {
