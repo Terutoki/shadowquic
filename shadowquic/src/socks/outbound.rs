@@ -180,7 +180,8 @@ impl SocksClient {
 
         let socket = UdpSocket::bind(bind_addr).await?;
         socket.connect(final_peer_addr).await?;
-        let mut upstream = UdpSocksWrap(Arc::new(socket), OnceCell::new_with(Some(final_peer_addr)));
+        let mut upstream =
+            UdpSocksWrap(Arc::new(socket), OnceCell::new_with(Some(final_peer_addr)));
 
         let upstream_clone = upstream.clone();
         let fut1 = async move {
