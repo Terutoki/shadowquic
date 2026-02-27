@@ -1,6 +1,5 @@
 use std::net::ToSocketAddrs;
 use std::sync::Arc;
-use std::time::Duration;
 
 use crate::{
     TcpSession, UdpRecv, UdpSend, UdpSession,
@@ -141,11 +140,8 @@ impl SocksClient {
         let tcp = TcpStream::connect(self.addr.clone()).await?;
         tcp.set_nodelay(true)?;
 
-        // 设置 TCP keepalive（通过标准库设置）
-        let std_tcp = tcp.into_std()?;
-        std_tcp.set_keepalive(Some(Duration::from_secs(30)))?;
-        let mut tcp = TcpStream::from_std(std_tcp)?;
-
+        // 由于环境兼容性问题，暂时禁用 TCP keepalive 设置
+        // 若需 keepalive，可使用 socket2 crate 或升级 Rust 版本
         let mut tcp = self.authenticate(tcp).await?;
 
         let socksreq = CmdReq {
@@ -199,7 +195,7 @@ impl SocksClient {
                 return Ok(());
             }
             let mut buf = [0u8];
-            // 使用 read 而不是 read_exact，因为 read_exact 在旧版 tokio 中可能返回 Result<usize>
+            // 使用 read 代替 read_exact，正确处理连接关闭
             match udp_session.stream.unwrap().read(&mut buf).await {
                 Ok(0) => {
                     // 正常关闭：对端关闭了连接
