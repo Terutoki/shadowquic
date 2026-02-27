@@ -17,7 +17,7 @@ use tokio::{
 };
 
 use async_trait::async_trait;
-use tracing::{Instrument, error, trace_span};
+use tracing::{Instrument, debug, error, trace_span};
 
 use crate::{
     Outbound, ProxyRequest,
@@ -140,7 +140,6 @@ impl SocksClient {
         let tcp = TcpStream::connect(self.addr.clone()).await?;
         tcp.set_nodelay(true)?;
 
-        // 环境兼容性原因，暂不设置 keepalive
         let mut tcp = self.authenticate(tcp).await?;
 
         let socksreq = CmdReq {
@@ -163,6 +162,7 @@ impl SocksClient {
 
         // 获取 TCP 控制连接的远端 IP（即 Socks5 服务器 IP）
         let server_ip = tcp.peer_addr()?.ip();
+        debug!("server IP: {}, original peer_addr: {}", server_ip, peer_addr);
 
         // 如果服务器返回通配 IP，则替换为服务器真实 IP；否则保持原样
         let target_ip = if peer_addr.ip().is_unspecified() {
@@ -171,6 +171,7 @@ impl SocksClient {
             peer_addr.ip()
         };
         let final_peer_addr = std::net::SocketAddr::new(target_ip, peer_addr.port());
+        debug!("final UDP relay address: {}", final_peer_addr);
 
         let bind_addr = if final_peer_addr.is_ipv4() {
             "0.0.0.0:0"
@@ -187,7 +188,12 @@ impl SocksClient {
         let fut1 = async move {
             loop {
                 let (buf, dst) = upstream.recv_from().await?;
-
+                debug!(
+                    "RECV from upstream: {} bytes, first 8 bytes: {:02x?}, dst={}",
+                    buf.len(),
+                    &buf[..buf.len().min(8)],
+                    dst
+                );
                 let _ = udp_session.send.send_to(buf, dst).await?;
             }
             #[allow(unreachable_code)]
@@ -196,7 +202,12 @@ impl SocksClient {
         let fut2 = async move {
             loop {
                 let (buf, dst) = udp_session.recv.recv_from().await?;
-
+                debug!(
+                    "SEND to upstream: {} bytes, first 8 bytes: {:02x?}, dst={}",
+                    buf.len(),
+                    &buf[..buf.len().min(8)],
+                    dst
+                );
                 let _ = upstream_clone.send_to(buf, dst).await?;
             }
             #[allow(unreachable_code)]
@@ -212,7 +223,7 @@ impl SocksClient {
             // 使用 read 代替 read_exact，正确处理连接关闭
             match udp_session.stream.unwrap().read(&mut buf).await {
                 Ok(0) => {
-                    // 正常关闭：对端关闭了连接
+                    debug!("control stream closed by peer");
                     Ok(())
                 }
                 Ok(1) => {
@@ -233,7 +244,7 @@ impl SocksClient {
                     ))
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
-                    // read 通常不会产生 UnexpectedEof，但保留处理
+                    debug!("control stream read unexpected eof");
                     Ok(())
                 }
                 Err(e) => Err(SError::UDPSessionClosed(format!(
