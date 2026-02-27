@@ -1,179 +1,281 @@
-use std::net::SocketAddr;
+use std::net::ToSocketAddrs;
 use std::sync::Arc;
 
-use crate::config::{AuthUser, SocksServerCfg};
-use crate::error::SError;
-use crate::msgs::socks5::{
-    self, AddrOrDomain, AuthReq, CmdReq, PasswordAuthReply, PasswordAuthReq,
-    SOCKS5_AUTH_METHOD_NONE, SOCKS5_AUTH_METHOD_PASSWORD, SOCKS5_CMD_TCP_BIND,
-    SOCKS5_CMD_TCP_CONNECT, SOCKS5_CMD_UDP_ASSOCIATE, SOCKS5_REPLY_SUCCEEDED, SOCKS5_VERSION,
+use crate::{
+    TcpSession, UdpRecv, UdpSend, UdpSession,
+    msgs::socks5::{
+        CmdReply, PasswordAuthReply, PasswordAuthReq, SOCKS5_AUTH_METHOD_PASSWORD,
+        SOCKS5_CMD_TCP_CONNECT, SOCKS5_CMD_UDP_ASSOCIATE, SOCKS5_REPLY_SUCCEEDED, SOCKS5_RESERVE,
+        SOCKS5_VERSION,
+    },
+    socks::UdpSocksWrap,
 };
-use crate::msgs::{SDecode, SEncode};
-use crate::utils::dual_socket::to_ipv4_mapped;
-use crate::{Inbound, ProxyRequest, TcpSession, UdpSession};
+use tokio::{
+    io::{AsyncReadExt, copy_bidirectional_with_sizes},
+    net::{TcpStream, UdpSocket},
+    sync::OnceCell,
+};
+
 use async_trait::async_trait;
-use socket2::{Domain, Protocol, Socket, Type};
-use tokio::net::{TcpListener, TcpStream, UdpSocket};
+use tracing::{Instrument, debug, error, trace_span};
 
-use anyhow::Result;
-use tracing::{Instrument, trace, trace_span};
+use crate::{
+    Outbound, ProxyRequest,
+    config::SocksClientCfg,
+    error::SError,
+    msgs::socks5::{AuthReply, AuthReq, CmdReq, SOCKS5_AUTH_METHOD_NONE, VarVec},
+    msgs::{SDecode, SEncode},
+};
 
-use super::UdpSocksWrap;
-
-pub struct SocksServer {
-    #[allow(dead_code)]
-    bind_addr: SocketAddr,
-    users: Vec<AuthUser>,
-    listener: TcpListener,
-}
-impl SocksServer {
-    pub async fn new(cfg: SocksServerCfg) -> Result<Self, SError> {
-        let dual_stack = cfg.bind_addr.is_ipv6();
-        let socket = Socket::new(
-            // Use socket2 for dualstack for windows compact
-            if dual_stack {
-                Domain::IPV6
-            } else {
-                Domain::IPV4
-            },
-            Type::STREAM,
-            Some(Protocol::TCP),
-        )?;
-        if dual_stack {
-            let _ = socket
-                .set_only_v6(false)
-                .map_err(|e| tracing::warn!("failed to set dual stack for socket: {}", e));
-        };
-        socket.set_reuse_address(true)?;
-        socket.set_nonblocking(true)?;
-        socket.bind(&cfg.bind_addr.into())?;
-        socket.listen(256)?;
-        let listener = TcpListener::from_std(socket.into())
-            .map_err(|e| SError::SocksError(format!("failed to create TcpListener: {e}")))?;
-        Ok(Self {
-            bind_addr: cfg.bind_addr,
-            listener,
-            users: cfg.users,
-        })
-    }
-    pub async fn authenticate(&self, mut stream: TcpStream) -> Result<TcpStream, SError> {
-        let auth_req = AuthReq::decode(&mut stream).await?;
-        if auth_req.version != SOCKS5_VERSION {
-            return Err(SError::ProtocolViolation);
-        }
-        let methods = auth_req.methods;
-        if methods.contents.is_empty() {
-            return Err(SError::ProtocolViolation);
-        }
-        let method = if self.users.is_empty() {
-            SOCKS5_AUTH_METHOD_NONE
-        } else {
-            SOCKS5_AUTH_METHOD_PASSWORD
-        };
-        if !methods.contents.contains(&method) {
-            return Err(SError::SocksError(format!(
-                "authentication method not supported:{:?}",
-                methods.contents
-            )));
-        }
-
-        let reply = socks5::AuthReply {
-            version: SOCKS5_VERSION,
-            method,
-        };
-        reply.encode(&mut stream).await?;
-        if self.users.is_empty() {
-            return Ok(stream);
-        }
-        let auth = PasswordAuthReq::decode(&mut stream).await?;
-        if !self.users.contains(&AuthUser {
-            username: String::from_utf8(auth.username.contents)
-                .map_err(|_| SError::SocksError("invalid UTF-8 in username".to_string()))?,
-            password: String::from_utf8(auth.password.contents)
-                .map_err(|_| SError::SocksError("invalid UTF-8 in password".to_string()))?,
-        }) {
-            return Err(SError::SocksError("authentication failed".to_string()));
-        }
-        let reply = PasswordAuthReply {
-            version: 0x01, // authentication version not socks version
-            status: SOCKS5_REPLY_SUCCEEDED,
-        };
-        reply.encode(&mut stream).await?;
-        Ok(stream)
-    }
-    async fn handle_socks(
-        &self,
-        s: TcpStream,
-        local_addr: SocketAddr,
-    ) -> Result<(TcpStream, CmdReq, Option<UdpSocket>), SError> {
-        let mut s = self.authenticate(s).await?;
-        let req = socks5::CmdReq::decode(&mut s).await?;
-
-        let addr = match req.dst.addr {
-            AddrOrDomain::V4(_) | AddrOrDomain::Domain(_) => AddrOrDomain::V4([0u8, 0u8, 0u8, 0u8]),
-            AddrOrDomain::V6(x) => AddrOrDomain::V6(x.map(|_| 0u8)),
-        };
-
-        let mut reply = socks5::CmdReply {
-            version: SOCKS5_VERSION,
-            rep: SOCKS5_REPLY_SUCCEEDED,
-            rsv: 0u8,
-            bind_addr: socks5::SocksAddr { addr, port: 0u16 },
-        };
-        let (reply, socket) = match req.cmd {
-            SOCKS5_CMD_TCP_CONNECT => (reply, None),
-            SOCKS5_CMD_UDP_ASSOCIATE => {
-                let mut local_addr = local_addr;
-
-                local_addr.set_port(0);
-                let socket = UdpSocket::bind(local_addr).await?;
-                let local_addr = socket.local_addr()?;
-                reply.bind_addr = local_addr.into();
-                (reply, Some(socket))
-            }
-            SOCKS5_CMD_TCP_BIND => {
-                return Err(SError::ProtocolUnimpl);
-            }
-            _ => {
-                return Err(SError::ProtocolViolation);
-            }
-        };
-
-        reply.encode(&mut s).await?;
-        trace!("socks request accepted: {}", req.dst);
-        Ok((s, req, socket))
-    }
+#[derive(Debug, Clone)]
+pub struct SocksClient {
+    pub addr: String,
+    pub username: Option<String>,
+    pub password: Option<String>,
 }
 
 #[async_trait]
-impl Inbound for SocksServer {
-    async fn accept(&mut self) -> Result<ProxyRequest, SError> {
-        let (stream, addr) = self.listener.accept().await?;
-        let span = trace_span!("socks", src = addr.to_string());
-        // ipv4 may be mapped for dual stack socket
-        let local_addr = to_ipv4_mapped(stream.local_addr().unwrap());
-
-        let (s, req, socket) = self
-            .handle_socks(stream, local_addr)
-            .instrument(span)
-            .await?;
-        match req.cmd {
-            SOCKS5_CMD_TCP_CONNECT => Ok(ProxyRequest::Tcp(TcpSession {
-                stream: Box::new(s),
-                dst: req.dst,
-            })),
-            SOCKS5_CMD_UDP_ASSOCIATE => {
-                let socket = Arc::new(socket.unwrap());
-                Ok(ProxyRequest::Udp(UdpSession {
-                    send: Arc::new(UdpSocksWrap(socket.clone(), Default::default())),
-                    recv: Box::new(UdpSocksWrap(socket, Default::default())),
-                    bind_addr: req.dst,
-                    stream: Some(Box::new(s)),
-                }))
+impl Outbound for SocksClient {
+    async fn handle(&mut self, req: ProxyRequest) -> Result<(), SError> {
+        let span = trace_span!("socks", server = self.addr);
+        let client = self.clone();
+        let fut = async move {
+            match req {
+                ProxyRequest::Tcp(tcp_session) => client.handle_tcp(tcp_session).await,
+                ProxyRequest::Udp(udp_session) => client.handle_udp(udp_session).await,
             }
-            _ => {
-                return Err(SError::ProtocolViolation);
+        };
+
+        tokio::spawn(
+            async {
+                fut.await
+                    .map_err(|x| error!("error due to handle socks request:{}", x))
+            }
+            .instrument(span),
+        );
+        Ok(())
+    }
+}
+
+impl SocksClient {
+    pub fn new(cfg: SocksClientCfg) -> Self {
+        Self {
+            addr: cfg.addr,
+            username: cfg.username,
+            password: cfg.password,
+        }
+    }
+
+    async fn authenticate(&self, mut tcp: TcpStream) -> Result<TcpStream, SError> {
+        let method = if self.username.is_some() {
+            SOCKS5_AUTH_METHOD_PASSWORD
+        } else {
+            SOCKS5_AUTH_METHOD_NONE
+        };
+        let auth = AuthReq {
+            version: SOCKS5_VERSION,
+            methods: VarVec {
+                len: 1,
+                contents: vec![method],
+            },
+        };
+
+        auth.encode(&mut tcp).await?;
+        let rep = AuthReply::decode(&mut tcp).await?;
+        if rep.version != SOCKS5_VERSION {
+            return Err(SError::SocksError("version not supported".into()));
+        }
+        if rep.method != method {
+            return Err(SError::SocksError(
+                "authenticate method not supported".into(),
+            ));
+        }
+        if let Some(username) = &self.username {
+            let auth = PasswordAuthReq {
+                version: 0x01, // This is password auth version not socks version
+                username: VarVec {
+                    len: username.len() as u8,
+                    contents: username.as_bytes().to_vec(),
+                },
+                password: VarVec {
+                    len: self.password.as_ref().unwrap().len() as u8,
+                    contents: self
+                        .password
+                        .as_ref()
+                        .ok_or(SError::SocksError("password not provided".into()))?
+                        .as_bytes()
+                        .to_vec(),
+                },
+            };
+            auth.encode(&mut tcp).await?;
+            let rep = PasswordAuthReply::decode(&mut tcp).await?;
+            if rep.status != SOCKS5_REPLY_SUCCEEDED {
+                return Err(SError::SocksError("authenticate failed".into()));
             }
         }
+        Ok(tcp)
+    }
+
+    async fn handle_tcp(&self, mut tcp_session: TcpSession) -> Result<(), SError> {
+        tracing::info!("connect to socks server: {}", self.addr);
+        let tcp = TcpStream::connect(self.addr.clone()).await?;
+        tcp.set_nodelay(true)?;
+        let mut tcp = self.authenticate(tcp).await?;
+        let socksreq = CmdReq {
+            version: SOCKS5_VERSION,
+            cmd: SOCKS5_CMD_TCP_CONNECT,
+            rsv: SOCKS5_RESERVE,
+            dst: tcp_session.dst,
+        };
+        socksreq.encode(&mut tcp).await?;
+        let _rep = CmdReply::decode(&mut tcp).await?;
+        tracing::trace!("socks tcp connection established");
+        copy_bidirectional_with_sizes(&mut tcp, &mut tcp_session.stream, 16 * 1024, 16 * 1024)
+            .await?;
+        Ok(())
+    }
+
+    async fn handle_udp(&self, mut udp_session: UdpSession) -> Result<(), SError> {
+        tracing::info!("connect to socks server: {}", self.addr);
+        let tcp = TcpStream::connect(self.addr.clone()).await?;
+        tcp.set_nodelay(true)?;
+
+        let mut tcp = self.authenticate(tcp).await?;
+
+        let socksreq = CmdReq {
+            version: SOCKS5_VERSION,
+            cmd: SOCKS5_CMD_UDP_ASSOCIATE,
+            rsv: SOCKS5_RESERVE,
+            dst: udp_session.bind_addr.clone(),
+        };
+        socksreq.encode(&mut tcp).await?;
+        let rep = CmdReply::decode(&mut tcp).await?;
+        tracing::trace!("socks udp association established");
+
+        // 解析服务器返回的 UDP 中继地址
+        let peer_addr = rep
+            .bind_addr
+            .to_socket_addrs()
+            .expect("socks server return a unresolvable address")
+            .next()
+            .expect("socks server return a unresolvable address");
+
+        // 获取 TCP 控制连接的远端 IP（即 Socks5 服务器 IP）
+        let server_ip = tcp.peer_addr()?.ip();
+        eprintln!("[DEBUG] server IP: {}, original peer_addr: {}", server_ip, peer_addr);
+        debug!(
+            "server IP: {}, original peer_addr: {}",
+            server_ip, peer_addr
+        );
+
+        // 如果服务器返回通配 IP，则替换为服务器真实 IP；否则保持原样
+        let target_ip = if peer_addr.ip().is_unspecified() {
+            server_ip
+        } else {
+            peer_addr.ip()
+        };
+        let final_peer_addr = std::net::SocketAddr::new(target_ip, peer_addr.port());
+        eprintln!("[DEBUG] final UDP relay address: {}", final_peer_addr);
+        debug!("final UDP relay address: {}", final_peer_addr);
+
+        let bind_addr = if final_peer_addr.is_ipv4() {
+            "0.0.0.0:0"
+        } else {
+            "[::]:0"
+        };
+
+        let socket = UdpSocket::bind(bind_addr).await?;
+        socket.connect(final_peer_addr).await?;
+        let mut upstream =
+            UdpSocksWrap(Arc::new(socket), OnceCell::new_with(Some(final_peer_addr)));
+
+        let upstream_clone = upstream.clone();
+        let fut1 = async move {
+            loop {
+                let (buf, dst) = upstream.recv_from().await?;
+                eprintln!(
+                    "[DEBUG] RECV from upstream: {} bytes, first 64: {:02x?}, dst={}",
+                    buf.len(),
+                    &buf[..buf.len().min(64)],
+                    dst
+                );
+                debug!(
+                    "RECV from upstream: {} bytes, full packet (first 64): {:02x?}, dst={}",
+                    buf.len(),
+                    &buf[..buf.len().min(64)],
+                    dst
+                );
+                let _ = udp_session.send.send_to(buf, dst).await?;
+            }
+            #[allow(unreachable_code)]
+            (Ok(()) as Result<(), SError>)
+        };
+        let fut2 = async move {
+            loop {
+                let (buf, dst) = udp_session.recv.recv_from().await?;
+                eprintln!(
+                    "[DEBUG] SEND to upstream: {} bytes, first 64: {:02x?}, dst={}",
+                    buf.len(),
+                    &buf[..buf.len().min(64)],
+                    dst
+                );
+                debug!(
+                    "SEND to upstream: {} bytes, full packet (first 64): {:02x?}, dst={}",
+                    buf.len(),
+                    &buf[..buf.len().min(64)],
+                    dst
+                );
+                let _ = upstream_clone.send_to(buf, dst).await?;
+            }
+            #[allow(unreachable_code)]
+            (Ok(()) as Result<(), SError>)
+        };
+        // control stream, in socks5 inbound, end of control stream
+        // means end of udp association.
+        let fut3 = async {
+            if udp_session.stream.is_none() {
+                return Ok(());
+            }
+            let mut buf = [0u8];
+            // 使用 read 代替 read_exact，正确处理连接关闭
+            match udp_session.stream.unwrap().read(&mut buf).await {
+                Ok(0) => {
+                    eprintln!("[DEBUG] control stream closed by peer");
+                    debug!("control stream closed by peer");
+                    Ok(())
+                }
+                Ok(1) => {
+                    // 收到数据，不符合规范
+                    error!("unexpected data received from socks control stream");
+                    Err(SError::UDPSessionClosed(
+                        "unexpected data received from socks control stream".into(),
+                    ))
+                }
+                Ok(n) => {
+                    // 理论上不可能收到多于1字节，但以防万一
+                    error!(
+                        "unexpected data received from socks control stream ({} bytes)",
+                        n
+                    );
+                    Err(SError::UDPSessionClosed(
+                        "unexpected data received from socks control stream".into(),
+                    ))
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+                    eprintln!("[DEBUG] control stream read unexpected eof");
+                    debug!("control stream read unexpected eof");
+                    Ok(())
+                }
+                Err(e) => Err(SError::UDPSessionClosed(format!(
+                    "control stream error: {}",
+                    e
+                ))),
+            }
+        };
+        // We can use spawn, but it requirs communication to shutdown the other
+        // Flatten spawn handle using try_join! doesn't work. Don't know why
+        tokio::try_join!(fut1, fut2, fut3)?;
+
+        Ok(())
     }
 }
