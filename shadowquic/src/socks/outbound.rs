@@ -162,7 +162,10 @@ impl SocksClient {
 
         // 获取 TCP 控制连接的远端 IP（即 Socks5 服务器 IP）
         let server_ip = tcp.peer_addr()?.ip();
-        debug!("server IP: {}, original peer_addr: {}", server_ip, peer_addr);
+        debug!(
+            "server IP: {}, original peer_addr: {}",
+            server_ip, peer_addr
+        );
 
         // 如果服务器返回通配 IP，则替换为服务器真实 IP；否则保持原样
         let target_ip = if peer_addr.ip().is_unspecified() {
