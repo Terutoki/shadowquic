@@ -1,4 +1,6 @@
-use std::{net::ToSocketAddrs, sync::Arc};
+use std::net::ToSocketAddrs;
+use std::sync::Arc;
+use std::time::Duration;
 
 use crate::{
     TcpSession, UdpRecv, UdpSend, UdpSession,
@@ -64,6 +66,7 @@ impl SocksClient {
             password: cfg.password,
         }
     }
+
     async fn authenticate(&self, mut tcp: TcpStream) -> Result<TcpStream, SError> {
         let method = if self.username.is_some() {
             SOCKS5_AUTH_METHOD_PASSWORD
@@ -134,82 +137,96 @@ impl SocksClient {
     }
 
     async fn handle_udp(&self, mut udp_session: UdpSession) -> Result<(), SError> {
-    tracing::info!("connect to socks server: {}", self.addr);
-    let tcp = TcpStream::connect(self.addr.clone()).await?;
-    tcp.set_nodelay(true)?;
+        tracing::info!("connect to socks server: {}", self.addr);
+        let tcp = TcpStream::connect(self.addr.clone()).await?;
+        tcp.set_nodelay(true)?;
 
-    let mut tcp = self.authenticate(tcp).await?;
+        // 设置 TCP keepalive，防止因空闲被中间设备断开
+        tcp.set_keepalive(Some(Duration::from_secs(30)))?;
 
-    let socksreq = CmdReq {
-        version: SOCKS5_VERSION,
-        cmd: SOCKS5_CMD_UDP_ASSOCIATE,
-        rsv: SOCKS5_RESERVE,
-        dst: udp_session.bind_addr.clone(),
-    };
-    socksreq.encode(&mut tcp).await?;
-    let rep = CmdReply::decode(&mut tcp).await?;
-    tracing::trace!("socks udp association established");
-    let peer_addr = rep
-        .bind_addr
-        .to_socket_addrs()
-        .expect("socks server return a unresolvable address")
-        .next()
-        .expect("socks server return a unresolvable address");
-    let bind_addr = if peer_addr.is_ipv4() {
-        "0.0.0.0:0"
-    } else {
-        "[::]:0"
-    };
+        let mut tcp = self.authenticate(tcp).await?;
 
-    let socket = UdpSocket::bind(bind_addr).await?;
-    socket.connect(peer_addr).await?;
-    let mut upstream = UdpSocksWrap(Arc::new(socket), OnceCell::new_with(Some(peer_addr)));
+        let socksreq = CmdReq {
+            version: SOCKS5_VERSION,
+            cmd: SOCKS5_CMD_UDP_ASSOCIATE,
+            rsv: SOCKS5_RESERVE,
+            dst: udp_session.bind_addr.clone(),
+        };
+        socksreq.encode(&mut tcp).await?;
+        let rep = CmdReply::decode(&mut tcp).await?;
+        tracing::trace!("socks udp association established");
+        let peer_addr = rep
+            .bind_addr
+            .to_socket_addrs()
+            .expect("socks server return a unresolvable address")
+            .next()
+            .expect("socks server return a unresolvable address");
+        let bind_addr = if peer_addr.is_ipv4() {
+            "0.0.0.0:0"
+        } else {
+            "[::]:0"
+        };
 
-    let upstream_clone = upstream.clone();
-    let fut1 = async move {
-        loop {
-            let (buf, dst) = upstream.recv_from().await?;
+        let socket = UdpSocket::bind(bind_addr).await?;
+        socket.connect(peer_addr).await?;
+        let mut upstream = UdpSocksWrap(Arc::new(socket), OnceCell::new_with(Some(peer_addr)));
 
-            let _ = udp_session.send.send_to(buf, dst).await?;
-        }
-        #[allow(unreachable_code)]
-        (Ok(()) as Result<(), SError>)
-    };
-    let fut2 = async move {
-        loop {
-            let (buf, dst) = udp_session.recv.recv_from().await?;
+        let upstream_clone = upstream.clone();
+        let fut1 = async move {
+            loop {
+                let (buf, dst) = upstream.recv_from().await?;
 
-            let _ = upstream_clone.send_to(buf, dst).await?;
-        }
-        #[allow(unreachable_code)]
-        (Ok(()) as Result<(), SError>)
-    };
-    
-    // 🔧 修复部分开始 - 替换原来的 fut3 + try_join!
-    tokio::select! {
-        res = fut1 => {
-            if let Err(e) = res {
-                tracing::debug!("UDP upstream (recv from proxy, send to client) ended: {:?}", e);
+                let _ = udp_session.send.send_to(buf, dst).await?;
             }
-        }
-        res = fut2 => {
-            if let Err(e) = res {
-                tracing::debug!("UDP downstream (recv from client, send to proxy) ended: {:?}", e);
+            #[allow(unreachable_code)]
+            (Ok(()) as Result<(), SError>)
+        };
+        let fut2 = async move {
+            loop {
+                let (buf, dst) = udp_session.recv.recv_from().await?;
+
+                let _ = upstream_clone.send_to(buf, dst).await?;
             }
-        }
-        _ = async {
-            if let Some(mut stream) = udp_session.stream {
-                let mut buf = [0u8; 1];
-                // 持续监听控制流，关闭时正常退出，不报错
-                let _ = stream.read_exact(&mut buf).await;
-                tracing::debug!("UDP session control stream closed");
+            #[allow(unreachable_code)]
+            (Ok(()) as Result<(), SError>)
+        };
+        // control stream, in socks5 inbound, end of control stream
+        // means end of udp association.
+        let fut3 = async {
+            if udp_session.stream.is_none() {
+                return Ok(());
             }
-        } => {
-            tracing::debug!("UDP session ended via control stream closure");
-        }
+            let mut buf = [0u8];
+            match udp_session
+                .stream
+                .unwrap()
+                .read_exact(&mut buf)
+                .await
+            {
+                Ok(()) => {
+                    // 控制流收到数据，不符合 Socks5 规范，视为异常
+                    error!("unexpected data received from socks control stream");
+                    Err(SError::UDPSessionClosed(
+                        "unexpected data received from socks control stream".into(),
+                    ))
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+                    // 正常关闭：服务器关闭了控制连接，UDP 关联结束
+                    Ok(())
+                }
+                Err(e) => {
+                    // 其他 IO 错误
+                    Err(SError::UDPSessionClosed(format!(
+                        "control stream error: {}",
+                        e
+                    )))
+                }
+            }
+        };
+        // We can use spawn, but it requirs communication to shutdown the other
+        // Flatten spawn handle using try_join! doesn't work. Don't know why
+        tokio::try_join!(fut1, fut2, fut3)?;
+
+        Ok(())
     }
-    // 🔧 修复部分结束
-
-    Ok(())
-}
 }
