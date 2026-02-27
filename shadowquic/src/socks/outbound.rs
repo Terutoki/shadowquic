@@ -197,12 +197,7 @@ impl SocksClient {
                 return Ok(());
             }
             let mut buf = [0u8];
-            match udp_session
-                .stream
-                .unwrap()
-                .read_exact(&mut buf)
-                .await
-            {
+            match udp_session.stream.unwrap().read_exact(&mut buf).await {
                 Ok(()) => {
                     // 控制流收到数据，不符合 Socks5 规范，视为异常
                     error!("unexpected data received from socks control stream");
