@@ -214,7 +214,10 @@ impl SocksClient {
                 }
                 Ok(n) => {
                     // 理论上不可能收到多于1字节，但以防万一
-                    error!("unexpected data received from socks control stream ({} bytes)", n);
+                    error!(
+                        "unexpected data received from socks control stream ({} bytes)",
+                        n
+                    );
                     Err(SError::UDPSessionClosed(
                         "unexpected data received from socks control stream".into(),
                     ))
@@ -223,12 +226,10 @@ impl SocksClient {
                     // read 通常不会产生 UnexpectedEof，但保留处理
                     Ok(())
                 }
-                Err(e) => {
-                    Err(SError::UDPSessionClosed(format!(
-                        "control stream error: {}",
-                        e
-                    )))
-                }
+                Err(e) => Err(SError::UDPSessionClosed(format!(
+                    "control stream error: {}",
+                    e
+                ))),
             }
         };
         // We can use spawn, but it requirs communication to shutdown the other
