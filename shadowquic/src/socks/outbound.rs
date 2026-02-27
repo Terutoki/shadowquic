@@ -141,8 +141,10 @@ impl SocksClient {
         let tcp = TcpStream::connect(self.addr.clone()).await?;
         tcp.set_nodelay(true)?;
 
-        // 设置 TCP keepalive，防止因空闲被中间设备断开
-        tcp.set_keepalive(Some(Duration::from_secs(30)))?;
+        // 设置 TCP keepalive（通过标准库设置）
+        let std_tcp = tcp.into_std()?;
+        std_tcp.set_keepalive(Some(Duration::from_secs(30)))?;
+        let mut tcp = TcpStream::from_std(std_tcp)?;
 
         let mut tcp = self.authenticate(tcp).await?;
 
@@ -197,20 +199,31 @@ impl SocksClient {
                 return Ok(());
             }
             let mut buf = [0u8];
-            match udp_session.stream.unwrap().read_exact(&mut buf).await {
-                Ok(()) => {
-                    // 控制流收到数据，不符合 Socks5 规范，视为异常
+            // 使用 read 而不是 read_exact，因为 read_exact 在旧版 tokio 中可能返回 Result<usize>
+            match udp_session.stream.unwrap().read(&mut buf).await {
+                Ok(0) => {
+                    // 正常关闭：对端关闭了连接
+                    Ok(())
+                }
+                Ok(1) => {
+                    // 收到数据，不符合规范
                     error!("unexpected data received from socks control stream");
                     Err(SError::UDPSessionClosed(
                         "unexpected data received from socks control stream".into(),
                     ))
                 }
+                Ok(n) => {
+                    // 理论上不可能收到多于1字节，但以防万一
+                    error!("unexpected data received from socks control stream ({} bytes)", n);
+                    Err(SError::UDPSessionClosed(
+                        "unexpected data received from socks control stream".into(),
+                    ))
+                }
                 Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
-                    // 正常关闭：服务器关闭了控制连接，UDP 关联结束
+                    // read 通常不会产生 UnexpectedEof，但保留处理
                     Ok(())
                 }
                 Err(e) => {
-                    // 其他 IO 错误
                     Err(SError::UDPSessionClosed(format!(
                         "control stream error: {}",
                         e
