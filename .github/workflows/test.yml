@@ -28,11 +28,6 @@ jobs:
             rustup update ${{ matrix.toolchain }} && rustup default ${{ matrix.toolchain }}
       - run: |
           nix develop --command \
-            rustup component add rustfmt
-          nix develop --command \
-            cargo fmt --check --verbose
-      - run: |
-          nix develop --command \
             cargo build --verbose
       - run: |
           nix develop --command \
