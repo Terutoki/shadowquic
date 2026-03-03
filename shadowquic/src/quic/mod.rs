@@ -37,7 +37,15 @@ impl Stats {
             total_bytes_received: AtomicU64::new(0),
         }
     }
+}
 
+impl Default for Stats {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Stats {
     pub fn connection_opened(&self) {
         self.total_connections.fetch_add(1, Ordering::Relaxed);
         self.active_connections.fetch_add(1, Ordering::Relaxed);
