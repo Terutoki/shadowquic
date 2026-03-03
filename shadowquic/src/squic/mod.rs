@@ -11,7 +11,7 @@ use std::{
 };
 
 use ahash::AHashMap;
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::BytesMut;
 use tokio::{
     io::{AsyncReadExt, AsyncWrite, AsyncWriteExt},
     sync::{
@@ -287,53 +287,46 @@ pub async fn handle_udp_send<C: QuicConnection>(
     };
     let quic_conn = conn.conn.clone();
     STATS.connection_opened();
+    
+    // Pre-allocate buffers for the hot path
+    let mut datagram_buf = BytesMut::with_capacity(2100);
+    let mut header_buf = Vec::with_capacity(64);
+    
     loop {
         let (bytes, dst) = down_stream.recv_from().await?;
-        let pkt_size = bytes.len();
-        STATS.packet_sent(pkt_size);
+        STATS.packet_sent(bytes.len());
+        
         let (id, is_new) = session.get_id_or_insert(&dst).await;
-        //let span = trace_span!("udp", id = id);
-        let ctl_header = SQUdpControlHeader {
-            dst: dst.clone(),
-            id,
-        };
-        let dg_header = SQPacketDatagramHeader { id };
-        if over_stream && !session.unistream_map.contains_key(&dst) {
-            let (uni, _id) = conn.open_uni().await?;
-            session.unistream_map.insert(dst.clone(), uni);
+        
+        // Send control header first if new
+        if is_new {
+            header_buf.clear();
+            SQUdpControlHeader { dst: dst.clone(), id }.encode(&mut header_buf).await?;
+            send.write_all(&header_buf).await?;
         }
-
-        let fut1 = async {
+        
+        if over_stream {
+            if !session.unistream_map.contains_key(&dst) {
+                let (uni, _id) = conn.open_uni().await?;
+                session.unistream_map.insert(dst.clone(), uni);
+            }
+            let uni_conn = session.unistream_map.get_mut(&dst).unwrap();
+            header_buf.clear();
             if is_new {
-                ctl_header.encode(&mut send).await?;
+                SQPacketDatagramHeader { id }.encode(&mut header_buf).await?;
             }
-            //trace!("udp control header sent");
-            Ok(()) as Result<(), SError>
-        };
-        let fut2 = async {
-            let mut content = BytesMut::with_capacity(2000);
-            let mut head = Vec::<u8>::new();
-            dg_header.encode(&mut head).await?;
-
-            if over_stream {
-                // Must be opened and inserted.
-                let conn = session.unistream_map.get_mut(&dst).unwrap();
-                let mut head = Vec::<u8>::new();
-                if is_new {
-                    dg_header.encode(&mut head).await?
-                }
-                (bytes.len() as u16).encode(&mut head).await?;
-                conn.write_all(&head).await?;
-                conn.write_all(&bytes).await?;
-            } else {
-                content.put(Bytes::from(head));
-                content.put(bytes);
-                let content = content.freeze();
-                quic_conn.send_datagram(content).await?;
-            }
-            Ok(())
-        };
-        tokio::try_join!(fut1, fut2)?;
+            (bytes.len() as u16).encode(&mut header_buf).await?;
+            uni_conn.write_all(&header_buf).await?;
+            uni_conn.write_all(&bytes).await?;
+        } else {
+            // Datagram path - zero-copy style
+            header_buf.clear();
+            SQPacketDatagramHeader { id }.encode(&mut header_buf).await?;
+            datagram_buf.clear();
+            datagram_buf.extend_from_slice(&header_buf);
+            datagram_buf.extend_from_slice(&bytes);
+            quic_conn.send_datagram(datagram_buf.clone().freeze()).await?;
+        }
     }
     #[allow(unreachable_code)]
     Ok(())
