@@ -3090,6 +3090,7 @@ dependencies = [
  "fast-socks5",
  "gm-quic",
  "iroh-quinn",
+ "lazy_static",
  "notify",
  "qbase",
  "qevent",

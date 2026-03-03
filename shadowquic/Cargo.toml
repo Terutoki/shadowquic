@@ -39,6 +39,7 @@ clap = { version = "4", features = ["derive"] }
 educe = "0.6.0"
 socket2 = "0.6.2"
 ahash = "0.8"
+lazy_static = "1.5"
 
 gm-quic = { version = "0.4", default-features = false, optional = true}
 qevent = { version = "0.4", default-features = false, optional = true}
