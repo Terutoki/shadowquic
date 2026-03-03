@@ -4,7 +4,6 @@
 
 use std::{
     collections::hash_map::{self, Entry},
-    io::Cursor,
     mem::replace,
     ops::Deref,
     sync::{Arc, atomic::AtomicU16},
@@ -374,32 +373,27 @@ pub async fn handle_udp_packet_recv<C: QuicConnection>(conn: SQConn<C>) -> Resul
         tokio::select! {
             b = conn.read_datagram() => {
                 let b = b?;
-                let pkt_size = b.len();
-                STATS.packet_received(pkt_size);
-                let b = BytesMut::from(b);
-                let mut cur = Cursor::new(b);
-                let SQPacketDatagramHeader{id} = SQPacketDatagramHeader::decode(&mut cur).await?;
+                STATS.packet_received(b.len());
+                
+                // Zero-copy: decode u16 id directly (2 bytes, big endian)
+                let id = u16::from_be_bytes([b[0], b[1]]);
+                let payload = b.slice(2..b.len());
 
                 match id_store.get_socket_or_notify(id).await {
                  Ok((udp,addr)) =>  {
-                    let pos = cur.position() as usize;
-                    let b = cur.into_inner().freeze();
-                    udp.send_to(b.slice(pos..b.len()), addr.clone()).await?;
+                    udp.send_to(payload, addr).await?;
                 }
                 Err(mut notify) =>  {
                     let id_store = id_store.clone();
                     let src_addr = conn.remote_address();
                     event!(Level::TRACE, "resolving datagram id:{}",id);
-                    // Might spawn too many tasks
+                    let payload = b;
                     tokio::spawn(async move {
-                        // It's safe to sender to be dropped
                         let _ = notify.changed().await.map_err(|_|debug!("id:{} notifier dropped",id));
-                        // session may be closed
                         let (udp,addr) = id_store.try_get_socket(id).await.ok_or(SError::UDPSessionClosed("UDP session closed".to_string()))?;
                         info!("udp over datagram: id:{}: {}->{}",id, src_addr, addr);
-                        let pos = cur.position() as usize;
-                        let b = cur.into_inner().freeze();
-                        let _ = udp.clone().send_to(b.slice(pos..b.len()), addr.clone()).await
+                        let payload = payload.slice(2..payload.len());
+                        let _ = udp.send_to(payload, addr).await
                         .map_err(|x|error!("{}",x));
                         Ok(()) as Result<(), SError>
                      }.in_current_span());
