@@ -79,8 +79,7 @@ impl From<Vec<u8>> for VarVec {
 #[async_trait::async_trait]
 impl SEncode for VarVec {
     async fn encode<T: AsyncWrite + Unpin + Send>(&self, s: &mut T) -> Result<(), SError> {
-        let buf = vec![self.len];
-        s.write_all(&buf).await?;
+        s.write_all(&[self.len]).await?;
         s.write_all(&self.contents[0..self.len as usize]).await?;
         Ok(())
     }
@@ -147,7 +146,7 @@ pub enum AddrOrDomain {
 }
 impl fmt::Display for AddrOrDomain {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match &self {
+        match self {
             AddrOrDomain::V4(x) => write!(f, "{}", IpAddr::from(*x))?,
             AddrOrDomain::V6(x) => write!(f, "{}", IpAddr::from(*x))?,
             AddrOrDomain::Domain(var_vec) => write!(
@@ -185,10 +184,10 @@ impl ToSocketAddrs for SocksAddr {
             )
                 .to_socket_addrs(),
             AddrOrDomain::V4(x) => {
-                Ok(vec![SocketAddr::from((x.to_owned(), self.port))].into_iter())
+                Ok(std::iter::once(SocketAddr::new(IpAddr::from(*x), self.port)).collect::<Vec<_>>().into_iter())
             }
             AddrOrDomain::V6(x) => {
-                Ok(vec![SocketAddr::from((x.to_owned(), self.port))].into_iter())
+                Ok(std::iter::once(SocketAddr::new(IpAddr::from(*x), self.port)).collect::<Vec<_>>().into_iter())
             }
         }
     }

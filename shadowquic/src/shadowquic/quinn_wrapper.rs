@@ -22,8 +22,9 @@ use crate::{
     config::{CongestionControl, ShadowQuicClientCfg, ShadowQuicServerCfg},
     error::SResult,
     quic::{
-        MAX_DATAGRAM_WINDOW, MAX_SEND_WINDOW, MAX_STREAM_WINDOW, QuicClient, QuicConnection,
-        QuicErrorRepr, QuicServer,
+        MAX_CONCURRENT_BIDI_STREAMS, MAX_CONCURRENT_UNI_STREAMS, MAX_DATAGRAM_WINDOW,
+        MAX_SEND_WINDOW, MAX_STREAM_WINDOW, QuicClient, QuicConnection, QuicErrorRepr,
+        QuicServer,
     },
 };
 
@@ -233,8 +234,8 @@ pub fn gen_client_cfg(cfg: &ShadowQuicClientCfg) -> quinn::ClientConfig {
     };
 
     tp_cfg
-        .max_concurrent_bidi_streams(500u32.into())
-        .max_concurrent_uni_streams(500u32.into())
+        .max_concurrent_bidi_streams(MAX_CONCURRENT_BIDI_STREAMS.into())
+        .max_concurrent_uni_streams(MAX_CONCURRENT_UNI_STREAMS.into())
         .mtu_discovery_config(mtudis)
         .min_mtu(cfg.min_mtu)
         .initial_mtu(cfg.initial_mtu)

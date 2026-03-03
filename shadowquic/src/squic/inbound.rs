@@ -1,6 +1,7 @@
 use bytes::Bytes;
-use std::{collections::HashMap, pin::Pin, sync::Arc};
+use std::{pin::Pin, sync::Arc};
 
+use ahash::AHashMap;
 use tokio::{
     io::{AsyncRead, AsyncWrite},
     select,
@@ -22,7 +23,7 @@ use crate::{
 
 use super::{SQConn, handle_udp_packet_recv, handle_udp_recv_ctrl, handle_udp_send};
 
-pub type SunnyQuicUsers = Arc<HashMap<SunnyCredential, String>>;
+pub type SunnyQuicUsers = Arc<AHashMap<SunnyCredential, String>>;
 
 #[derive(Clone)]
 pub struct SQServerConn<C: QuicConnection> {
@@ -91,8 +92,8 @@ impl<C: QuicConnection> SQServerConn<C> {
             | SQReq::SQAssociatOverStream(ref dst)) => {
                 wait_sunny_auth(&self.inner).await?;
                 info!("association request to {} accepted", dst.clone());
-                let (local_send, udp_recv) = channel::<(Bytes, SocksAddr)>(10);
-                let (udp_send, local_recv) = channel::<(Bytes, SocksAddr)>(10);
+                let (local_send, udp_recv) = channel::<(Bytes, SocksAddr)>(256);
+                let (udp_send, local_recv) = channel::<(Bytes, SocksAddr)>(256);
                 let udp: UdpSession = UdpSession {
                     send: Arc::new(udp_send),
                     recv: Box::new(udp_recv),

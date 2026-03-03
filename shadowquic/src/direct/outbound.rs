@@ -1,8 +1,9 @@
 use std::{
-    collections::HashMap,
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs},
     sync::Arc,
 };
+
+use ahash::AHashMap;
 
 use bytes::BytesMut;
 use tokio::{
@@ -45,8 +46,8 @@ impl Outbound for DirectOut {
                     let (_, _) = tokio::io::copy_bidirectional_with_sizes(
                         &mut tcp_session.stream,
                         &mut upstream,
-                        1024 * 16,
-                        1024 * 16,
+                        65536,
+                        65536,
                     )
                     .await?;
                 }
@@ -69,7 +70,7 @@ impl Outbound for DirectOut {
 }
 
 #[derive(Default, Clone)]
-struct DnsResolve(Arc<Mutex<HashMap<Vec<u8>, SocketAddr>>>);
+struct DnsResolve(Arc<Mutex<AHashMap<Vec<u8>, SocketAddr>>>);
 impl DnsResolve {
     async fn resolve(
         &self,
@@ -156,7 +157,7 @@ impl DirectOut {
         let fut1 = async move {
             loop {
                 let mut buf_send = BytesMut::new();
-                buf_send.resize(2000, 0);
+                buf_send.resize(65535, 0);
                 //trace!("recv upstream");
                 let (len, dst) = upstream.recv_from(&mut buf_send).await?;
                 //trace!("udp request reply from:{}", dst);

@@ -3,10 +3,7 @@
 //! It contains an optional authentication feature for sunnyquic only
 
 use std::{
-    collections::{
-        HashMap,
-        hash_map::{self, Entry},
-    },
+    collections::hash_map::{self, Entry},
     io::Cursor,
     mem::replace,
     ops::Deref,
@@ -14,6 +11,7 @@ use std::{
     time::Duration,
 };
 
+use ahash::AHashMap;
 use bytes::{BufMut, Bytes, BytesMut};
 use tokio::{
     io::{AsyncReadExt, AsyncWrite, AsyncWriteExt},
@@ -33,7 +31,7 @@ use crate::{
         socks5::SocksAddr,
         squic::{SQPacketDatagramHeader, SQReq, SQUdpControlHeader},
     },
-    quic::QuicConnection,
+    quic::{QuicConnection, STATS},
 };
 
 pub mod inbound;
@@ -88,7 +86,7 @@ type IDStoreVal<T> = Result<T, Sender<()>>;
 #[derive(Clone, Default)]
 pub(crate) struct IDStore<T = (AnyUdpSend, SocksAddr)> {
     pub(crate) id_counter: Arc<AtomicU16>,
-    pub(crate) inner: Arc<RwLock<HashMap<u16, IDStoreVal<T>>>>,
+    pub(crate) inner: Arc<RwLock<AHashMap<u16, IDStoreVal<T>>>>,
 }
 
 impl<T> IDStore<T>
@@ -190,8 +188,8 @@ where
 /// When session ended, the ids created by this session will be removed from the IDStore.
 struct AssociateSendSession<W: AsyncWrite> {
     id_store: IDStore<()>,
-    dst_map: HashMap<SocksAddr, u16>,
-    unistream_map: HashMap<SocksAddr, W>,
+    dst_map: AHashMap<SocksAddr, u16>,
+    unistream_map: AHashMap<SocksAddr, W>,
 }
 impl<W: AsyncWrite> AssociateSendSession<W> {
     pub async fn get_id_or_insert(&mut self, addr: &SocksAddr) -> (u16, bool) {
@@ -236,7 +234,7 @@ impl<W: AsyncWrite> Drop for AssociateSendSession<W> {
 /// Second. it records ids created by this session and clean those ids when session ended.
 struct AssociateRecvSession {
     id_store: IDStore<(AnyUdpSend, SocksAddr)>,
-    id_map: HashMap<u16, SocksAddr>,
+    id_map: AHashMap<u16, SocksAddr>,
 }
 impl AssociateRecvSession {
     pub async fn store_socket(&mut self, id: u16, dst: SocksAddr, socks: AnyUdpSend) {
@@ -289,8 +287,11 @@ pub async fn handle_udp_send<C: QuicConnection>(
         unistream_map: Default::default(),
     };
     let quic_conn = conn.conn.clone();
+    STATS.connection_opened();
     loop {
         let (bytes, dst) = down_stream.recv_from().await?;
+        let pkt_size = bytes.len();
+        STATS.packet_sent(pkt_size);
         let (id, is_new) = session.get_id_or_insert(&dst).await;
         //let span = trace_span!("udp", id = id);
         let ctl_header = SQUdpControlHeader {
@@ -368,10 +369,13 @@ pub async fn handle_udp_packet_recv<C: QuicConnection>(conn: SQConn<C>) -> Resul
     let id_store = conn.recv_id_store.clone();
 
     wait_sunny_auth(&conn).await?;
+    STATS.connection_opened();
     loop {
         tokio::select! {
             b = conn.read_datagram() => {
                 let b = b?;
+                let pkt_size = b.len();
+                STATS.packet_received(pkt_size);
                 let b = BytesMut::from(b);
                 let mut cur = Cursor::new(b);
                 let SQPacketDatagramHeader{id} = SQPacketDatagramHeader::decode(&mut cur).await?;

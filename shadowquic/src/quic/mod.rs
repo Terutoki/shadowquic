@@ -1,4 +1,5 @@
 use std::net::{SocketAddr, UdpSocket};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::error::SResult;
 use async_trait::async_trait;
@@ -12,6 +13,52 @@ pub const MAX_WINDOW_BASE: u64 = 4 * 12_500_000 * 100 / 1000; // 100ms RTT
 pub const MAX_STREAM_WINDOW: u64 = MAX_WINDOW_BASE;
 pub const MAX_SEND_WINDOW: u64 = MAX_WINDOW_BASE * 8;
 pub const MAX_DATAGRAM_WINDOW: u64 = MAX_WINDOW_BASE * 2;
+
+pub const MAX_CONCURRENT_BIDI_STREAMS: u32 = 1000;
+pub const MAX_CONCURRENT_UNI_STREAMS: u32 = 1000;
+
+pub struct Stats {
+    pub total_connections: AtomicU64,
+    pub active_connections: AtomicU64,
+    pub total_packets_sent: AtomicU64,
+    pub total_packets_received: AtomicU64,
+    pub total_bytes_sent: AtomicU64,
+    pub total_bytes_received: AtomicU64,
+}
+
+impl Stats {
+    pub const fn new() -> Self {
+        Self {
+            total_connections: AtomicU64::new(0),
+            active_connections: AtomicU64::new(0),
+            total_packets_sent: AtomicU64::new(0),
+            total_packets_received: AtomicU64::new(0),
+            total_bytes_sent: AtomicU64::new(0),
+            total_bytes_received: AtomicU64::new(0),
+        }
+    }
+
+    pub fn connection_opened(&self) {
+        self.total_connections.fetch_add(1, Ordering::Relaxed);
+        self.active_connections.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn connection_closed(&self) {
+        self.active_connections.fetch_sub(1, Ordering::Relaxed);
+    }
+
+    pub fn packet_sent(&self, size: usize) {
+        self.total_packets_sent.fetch_add(1, Ordering::Relaxed);
+        self.total_bytes_sent.fetch_add(size as u64, Ordering::Relaxed);
+    }
+
+    pub fn packet_received(&self, size: usize) {
+        self.total_packets_received.fetch_add(1, Ordering::Relaxed);
+        self.total_bytes_received.fetch_add(size as u64, Ordering::Relaxed);
+    }
+}
+
+pub static STATS: Stats = Stats::new();
 
 // #[cfg(feature = "gm-quic")]
 // mod gm_quic_wrapper;
