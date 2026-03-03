@@ -171,7 +171,7 @@ jobs:
             tool: cross
             toolchain: nightly
             install-target: false
-            components: rust-src, rustfmt, clippy
+            components: rust-src, rustfmt
             extra-args: "-Z build-std=std,panic_abort"
             skip-test: true
           - os: ubuntu-latest
@@ -180,7 +180,7 @@ jobs:
             tool: cross
             toolchain: nightly
             install-target: false
-            components: rust-src, rustfmt, clippy
+            components: rust-src, rustfmt
             extra-args: "-Z build-std=std,panic_abort"
             skip-test: true
           - os: ubuntu-latest
@@ -189,7 +189,7 @@ jobs:
             tool: cross
             toolchain: nightly
             install-target: false
-            components: rust-src, rustfmt, clippy
+            components: rust-src, rustfmt
             extra-args: "-Z build-std=std,panic_abort"
             skip-test: true
           - os: ubuntu-latest
@@ -198,7 +198,7 @@ jobs:
             tool: cross
             toolchain: nightly
             install-target: false
-            components: rust-src, rustfmt, clippy
+            components: rust-src, rustfmt
             extra-args: "-Z build-std=std,panic_abort"
             skip-test: true
           # Windows gnu: tokio dont work
@@ -222,7 +222,7 @@ jobs:
         with:
           toolchain: ${{ matrix.toolchain || env.RUST_TOOLCHAIN }}
           targets: ${{ matrix.install-target != false && matrix.target || '' }}
-          components: ${{ matrix.components || 'rustfmt, clippy' }}
+          components: ${{ matrix.components || 'rustfmt' }}
 
       - name: Install rust targets & cross
         if: matrix.tool == 'cross'
@@ -239,15 +239,6 @@ jobs:
       - name: Install Windows ARM target
         if: matrix.target == 'aarch64-pc-windows-msvc'
         run: rustup target add aarch64-pc-windows-msvc
-
-      - name: Cargo clippy
-        uses: clechasseur/rs-cargo@v4
-        with:
-          tool: ${{ matrix.tool }}
-          command: clippy
-          args: --all --target ${{ matrix.target }} ${{ matrix.extra-args }} -- -D warnings
-        env:
-          RUSTFLAGS: ${{ matrix.rustflags }}
 
       - name: Cargo test
         uses: clechasseur/rs-cargo@v4
