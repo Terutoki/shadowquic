@@ -2,7 +2,7 @@ use bytes::BytesMut;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-const POOL_SIZE: usize = 64;
+const POOL_SIZE: usize = 256;
 const BUFFER_SIZE: usize = 2048;
 
 pub struct BufferPool {
@@ -36,6 +36,22 @@ impl BufferPool {
         }
         self.total_allocated.fetch_add(1, Ordering::Relaxed);
         BytesMut::with_capacity(BUFFER_SIZE)
+    }
+
+    #[inline]
+    pub fn try_alloc(&self) -> Option<BytesMut> {
+        for slot in self.pool.iter() {
+            let val = slot.load(Ordering::Acquire);
+            if val > 0
+                && slot
+                    .compare_exchange(val, val - 1, Ordering::Release, Ordering::Acquire)
+                    .is_ok()
+            {
+                self.total_reused.fetch_add(1, Ordering::Relaxed);
+                return Some(BytesMut::with_capacity(BUFFER_SIZE));
+            }
+        }
+        None
     }
 
     #[inline]
