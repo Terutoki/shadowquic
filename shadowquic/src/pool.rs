@@ -23,7 +23,7 @@ impl BufferPool {
 
     #[inline]
     pub fn alloc(&self) -> BytesMut {
-        for (_i, slot) in self.pool.iter().enumerate() {
+        for slot in self.pool.iter() {
             let val = slot.load(Ordering::Acquire);
             if val > 0
                 && slot
