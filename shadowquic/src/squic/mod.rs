@@ -127,12 +127,12 @@ where
                 // This may fail is UDP session is closed right at this moment.
                 n.changed()
                     .await
-                    .map_err(|_| SError::UDPSessionClosed("notify sender dropped".to_string()))?;
+                    .map_err(|_| SError::UDPSessionClosed(String::from("notify sender dropped")))?;
                 //
                 let ret = self
                     .try_get_socket(id)
                     .await
-                    .ok_or(SError::UDPSessionClosed("UDP session closed".to_string()))?;
+                    .ok_or(SError::UDPSessionClosed(String::from("UDP session closed")))?;
                 Ok(ret)
             }
         }
@@ -208,14 +208,14 @@ impl<W: AsyncWrite> AssociateSendSession<W> {
 impl<W: AsyncWrite> Drop for AssociateSendSession<W> {
     fn drop(&mut self) {
         let id_store = self.id_store.inner.clone();
-        let id_remove = self.dst_map.clone();
+        let id_remove: Vec<u16> = self.dst_map.values().copied().collect();
         tokio::spawn(
             async move {
                 let mut id_store = id_store.write().await;
                 let len = id_store.len();
-                id_remove.values().for_each(|k| {
+                for k in &id_remove {
                     id_store.remove(k);
-                });
+                }
                 let decrease = len - id_store.len();
                 event!(
                     Level::TRACE,
@@ -250,15 +250,15 @@ impl AssociateRecvSession {
 impl Drop for AssociateRecvSession {
     fn drop(&mut self) {
         let id_store = self.id_store.inner.clone();
-        let id_remove = self.id_map.clone();
+        let id_remove: Vec<u16> = self.id_map.keys().copied().collect();
         tokio::spawn(
             async move {
                 let mut id_store = id_store.write().await;
                 let len = id_store.len();
 
-                id_remove.keys().for_each(|k| {
+                for k in &id_remove {
                     id_store.remove(k);
-                });
+                }
                 let decrease = len - id_store.len();
                 event!(
                     Level::TRACE,
@@ -388,7 +388,7 @@ pub async fn handle_udp_packet_recv<C: QuicConnection>(conn: SQConn<C>) -> Resul
                     let payload = b;
                     tokio::spawn(async move {
                         let _ = notify.changed().await.map_err(|_|debug!("id:{} notifier dropped",id));
-                        let (udp,addr) = id_store.try_get_socket(id).await.ok_or(SError::UDPSessionClosed("UDP session closed".to_string()))?;
+                        let (udp,addr) = id_store.try_get_socket(id).await.ok_or(SError::UDPSessionClosed(String::from("UDP session closed")))?;
                         info!("udp over datagram: id:{}: {}->{}",id, src_addr, addr);
                         let payload = payload.slice(2..);
                         let _ = udp.send_to(payload, addr).await
