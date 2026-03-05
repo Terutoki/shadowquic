@@ -325,7 +325,7 @@ pub async fn handle_udp_send<C: QuicConnection>(
             datagram_buf.clear();
             datagram_buf.extend_from_slice(&header_buf);
             datagram_buf.extend_from_slice(&bytes);
-            quic_conn.send_datagram(datagram_buf.clone().freeze()).await?;
+            quic_conn.send_datagram(datagram_buf.split().freeze()).await?;
         }
     }
     #[allow(unreachable_code)]
