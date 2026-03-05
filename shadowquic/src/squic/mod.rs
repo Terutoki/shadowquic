@@ -192,13 +192,15 @@ struct AssociateSendSession<W: AsyncWrite> {
 }
 impl<W: AsyncWrite> AssociateSendSession<W> {
     pub async fn get_id_or_insert(&mut self, addr: &SocksAddr) -> (u16, bool) {
-        if let Some(id) = self.dst_map.get(addr) {
-            (*id, false)
-        } else {
-            let id = self.id_store.fetch_new_id(()).await;
-            self.dst_map.insert(addr.clone(), id);
-            trace!("send session: insert id:{}, addr:{}", id, addr);
-            (id, true)
+        use std::collections::hash_map::Entry;
+        match self.dst_map.entry(addr.clone()) {
+            Entry::Occupied(e) => (*e.get(), false),
+            Entry::Vacant(e) => {
+                let id = self.id_store.fetch_new_id(()).await;
+                e.insert(id);
+                trace!("send session: insert id:{}, addr:{}", id, addr);
+                (id, true)
+            }
         }
     }
 }
