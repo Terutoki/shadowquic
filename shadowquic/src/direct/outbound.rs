@@ -156,7 +156,7 @@ impl DirectOut {
         let dns_strategy = self.cfg.dns_strategy.clone();
         let fut1 = async move {
             loop {
-                let mut buf_send = BytesMut::new();
+                let mut buf_send = BytesMut::with_capacity(65535);
                 buf_send.resize(65535, 0);
                 //trace!("recv upstream");
                 let (len, dst) = upstream.recv_from(&mut buf_send).await?;

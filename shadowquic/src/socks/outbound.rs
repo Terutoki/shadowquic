@@ -130,7 +130,7 @@ impl SocksClient {
         socksreq.encode(&mut tcp).await?;
         let _rep = CmdReply::decode(&mut tcp).await?;
         tracing::trace!("socks tcp connection established");
-        copy_bidirectional_with_sizes(&mut tcp, &mut tcp_session.stream, 16 * 1024, 16 * 1024)
+        copy_bidirectional_with_sizes(&mut tcp, &mut tcp_session.stream, 262144, 262144)
             .await?;
         Ok(())
     }

@@ -370,7 +370,7 @@ pub async fn handle_udp_packet_recv<C: QuicConnection>(conn: SQConn<C>) -> Resul
                 
                 // Zero-copy: decode u16 id directly (2 bytes, big endian)
                 let id = u16::from_be_bytes([b[0], b[1]]);
-                let payload = b.slice(2..b.len());
+                let payload = b.slice(2..);
 
                 match id_store.get_socket_or_notify(id).await {
                  Ok((udp,addr)) =>  {
@@ -385,7 +385,7 @@ pub async fn handle_udp_packet_recv<C: QuicConnection>(conn: SQConn<C>) -> Resul
                         let _ = notify.changed().await.map_err(|_|debug!("id:{} notifier dropped",id));
                         let (udp,addr) = id_store.try_get_socket(id).await.ok_or(SError::UDPSessionClosed("UDP session closed".to_string()))?;
                         info!("udp over datagram: id:{}: {}->{}",id, src_addr, addr);
-                        let payload = payload.slice(2..payload.len());
+                        let payload = payload.slice(2..);
                         let _ = udp.send_to(payload, addr).await
                         .map_err(|x|error!("{}",x));
                         Ok(()) as Result<(), SError>
