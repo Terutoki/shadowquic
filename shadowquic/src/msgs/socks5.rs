@@ -184,10 +184,10 @@ impl ToSocketAddrs for SocksAddr {
             )
                 .to_socket_addrs(),
             AddrOrDomain::V4(x) => {
-                Ok(std::iter::once(SocketAddr::new(IpAddr::from(*x), self.port)).collect::<Vec<_>>().into_iter())
+                Ok(vec![SocketAddr::new(IpAddr::from(*x), self.port)].into_iter())
             }
             AddrOrDomain::V6(x) => {
-                Ok(std::iter::once(SocketAddr::new(IpAddr::from(*x), self.port)).collect::<Vec<_>>().into_iter())
+                Ok(vec![SocketAddr::new(IpAddr::from(*x), self.port)].into_iter())
             }
         }
     }

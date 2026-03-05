@@ -78,7 +78,7 @@ impl QuicClient for gm_quic::prelude::QuicClient {
             //.without_verifier()
             .without_cert()
             .with_parameters(cli_para)
-            .with_alpns(cfg.alpn.iter().map(|alpn| alpn.clone().into_bytes()));
+            .with_alpns(cfg.alpn.iter().map(|alpn| alpn.as_bytes().to_vec()));
 
         if cfg.zero_rtt {
             client = client.enable_0rtt();
@@ -203,7 +203,7 @@ impl QuicServer for EndServer {
             .with_parameters(server_para)
             .without_client_cert_verifier()
             .enable_0rtt()
-            .with_alpns(cfg.alpn.iter().map(|alpn| alpn.clone().into_bytes()))
+            .with_alpns(cfg.alpn.iter().map(|alpn| alpn.as_bytes().to_vec()))
             .listen(128);
         listeners
             .add_server(

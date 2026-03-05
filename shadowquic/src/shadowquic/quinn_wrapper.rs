@@ -219,7 +219,7 @@ pub fn gen_client_cfg(cfg: &ShadowQuicClientCfg) -> quinn::ClientConfig {
     let mut crypto = rustls_jls::ClientConfig::builder()
         .with_root_certificates(root_store)
         .with_no_client_auth();
-    crypto.alpn_protocols = cfg.alpn.iter().map(|x| x.to_owned().into_bytes()).collect();
+    crypto.alpn_protocols = cfg.alpn.iter().map(|x| x.as_bytes().to_vec()).collect();
     crypto.enable_early_data = cfg.zero_rtt;
     crypto.jls_config = rustls_jls::jls::JlsClientConfig::new(&cfg.password, &cfg.username);
     let mut tp_cfg = TransportConfig::default();
@@ -288,8 +288,7 @@ impl QuicServer for Endpoint {
         crypto.alpn_protocols = cfg
             .alpn
             .iter()
-            .cloned()
-            .map(|alpn| alpn.into_bytes())
+            .map(|alpn| alpn.as_bytes().to_vec())
             .collect();
         crypto.max_early_data_size = if cfg.zero_rtt { u32::MAX } else { 0 };
         crypto.send_half_rtt_data = cfg.zero_rtt;
