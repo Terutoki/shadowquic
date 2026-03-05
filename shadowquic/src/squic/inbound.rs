@@ -91,7 +91,7 @@ impl<C: QuicConnection> SQServerConn<C> {
             ref req @ (SQReq::SQAssociatOverDatagram(ref dst)
             | SQReq::SQAssociatOverStream(ref dst)) => {
                 wait_sunny_auth(&self.inner).await?;
-                info!("association request to {} accepted", dst.clone());
+                info!("association request to {} accepted", dst);
                 let (local_send, udp_recv) = channel::<(Bytes, SocksAddr)>(256);
                 let (udp_send, local_recv) = channel::<(Bytes, SocksAddr)>(256);
                 let udp: UdpSession = UdpSession {
@@ -101,6 +101,7 @@ impl<C: QuicConnection> SQServerConn<C> {
                     bind_addr: dst.clone(),
                 };
                 let local_send = Arc::new(local_send);
+                let over_stream = matches!(req, SQReq::SQAssociatOverStream(_));
                 req_send
                     .send(ProxyRequest::Udp(udp))
                     .await
@@ -109,7 +110,7 @@ impl<C: QuicConnection> SQServerConn<C> {
                     send,
                     Box::new(local_recv),
                     self.inner.clone(),
-                    req == &SQReq::SQAssociatOverStream(dst.clone()),
+                    over_stream,
                 );
                 let fut2 = handle_udp_recv_ctrl(recv, local_send, self.inner);
                 tokio::try_join!(fut1, fut2)?;

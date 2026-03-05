@@ -306,11 +306,14 @@ pub async fn handle_udp_send<C: QuicConnection>(
         }
         
         if over_stream {
-            if !session.unistream_map.contains_key(&dst) {
-                let (uni, _id) = conn.open_uni().await?;
-                session.unistream_map.insert(dst.clone(), uni);
-            }
-            let uni_conn = session.unistream_map.get_mut(&dst).unwrap();
+            use std::collections::hash_map::Entry;
+            let uni_conn = match session.unistream_map.entry(dst.clone()) {
+                Entry::Occupied(e) => e.into_mut(),
+                Entry::Vacant(e) => {
+                    let (uni, _id) = conn.open_uni().await?;
+                    e.insert(uni)
+                }
+            };
             header_buf.clear();
             if is_new {
                 SQPacketDatagramHeader { id }.encode(&mut header_buf).await?;
