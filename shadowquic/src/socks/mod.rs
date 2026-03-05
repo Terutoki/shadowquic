@@ -20,7 +20,7 @@ pub struct UdpSocksWrap(Arc<UdpSocket>, OnceCell<SocketAddr>); // remote addr
 #[async_trait]
 impl UdpRecv for UdpSocksWrap {
     async fn recv_from(&mut self) -> Result<(Bytes, SocksAddr), SError> {
-        let mut buf = BytesMut::new();
+        let mut buf = BytesMut::with_capacity(2000);
         buf.resize(2000, 0);
 
         let (len, dst) = self.0.recv_from(&mut buf).await?;
@@ -51,12 +51,11 @@ impl UdpSend for UdpSocksWrap {
             frag: 0,
             dst: addr,
         };
-        let mut buf_new = BytesMut::with_capacity(1600);
-        let header = Vec::new();
-        let mut cur = Cursor::new(header);
-        reply.encode(&mut cur).await?;
-        let header = cur.into_inner();
-        buf_new.put(Bytes::from(header));
+        let mut header = Vec::with_capacity(64);
+        reply.encode(&mut header).await?;
+        
+        let mut buf_new = BytesMut::with_capacity(header.len() + buf.len());
+        buf_new.put_slice(&header);
         buf_new.put(buf);
 
         Ok(self.0.send(&buf_new).await?)

@@ -17,7 +17,7 @@ use tokio::{
 };
 
 use async_trait::async_trait;
-use tracing::{Instrument, debug, error, trace_span};
+use tracing::{Instrument, debug, error, trace, trace_span};
 
 use crate::{
     Outbound, ProxyRequest,
@@ -162,10 +162,6 @@ impl SocksClient {
 
         // 获取 TCP 控制连接的远端 IP（即 Socks5 服务器 IP）
         let server_ip = tcp.peer_addr()?.ip();
-        eprintln!(
-            "[DEBUG] server IP: {}, original peer_addr: {}",
-            server_ip, peer_addr
-        );
         debug!(
             "server IP: {}, original peer_addr: {}",
             server_ip, peer_addr
@@ -178,7 +174,6 @@ impl SocksClient {
             peer_addr.ip()
         };
         let final_peer_addr = std::net::SocketAddr::new(target_ip, peer_addr.port());
-        eprintln!("[DEBUG] final UDP relay address: {}", final_peer_addr);
         debug!("final UDP relay address: {}", final_peer_addr);
 
         let bind_addr = if final_peer_addr.is_ipv4() {
@@ -196,16 +191,9 @@ impl SocksClient {
         let fut1 = async move {
             loop {
                 let (buf, dst) = upstream.recv_from().await?;
-                eprintln!(
-                    "[DEBUG] RECV from upstream: {} bytes, first 64: {:02x?}, dst={}",
+                trace!(
+                    "RECV from upstream: {} bytes, dst={}",
                     buf.len(),
-                    &buf[..buf.len().min(64)],
-                    dst
-                );
-                debug!(
-                    "RECV from upstream: {} bytes, full packet (first 64): {:02x?}, dst={}",
-                    buf.len(),
-                    &buf[..buf.len().min(64)],
                     dst
                 );
                 let _ = udp_session.send.send_to(buf, dst).await?;
@@ -216,16 +204,9 @@ impl SocksClient {
         let fut2 = async move {
             loop {
                 let (buf, dst) = udp_session.recv.recv_from().await?;
-                eprintln!(
-                    "[DEBUG] SEND to upstream: {} bytes, first 64: {:02x?}, dst={}",
+                trace!(
+                    "SEND to upstream: {} bytes, dst={}",
                     buf.len(),
-                    &buf[..buf.len().min(64)],
-                    dst
-                );
-                debug!(
-                    "SEND to upstream: {} bytes, full packet (first 64): {:02x?}, dst={}",
-                    buf.len(),
-                    &buf[..buf.len().min(64)],
                     dst
                 );
                 let _ = upstream_clone.send_to(buf, dst).await?;
@@ -243,7 +224,6 @@ impl SocksClient {
             // 使用 read 代替 read_exact，正确处理连接关闭
             match udp_session.stream.unwrap().read(&mut buf).await {
                 Ok(0) => {
-                    eprintln!("[DEBUG] control stream closed by peer");
                     debug!("control stream closed by peer");
                     Ok(())
                 }
@@ -265,7 +245,6 @@ impl SocksClient {
                     ))
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
-                    eprintln!("[DEBUG] control stream read unexpected eof");
                     debug!("control stream read unexpected eof");
                     Ok(())
                 }
