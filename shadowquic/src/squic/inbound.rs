@@ -77,7 +77,7 @@ impl<C: QuicConnection> SQServerConn<C> {
                 info!(
                     "connect request: {}->{} accepted",
                     self.inner.remote_address(),
-                    dst.clone()
+                    dst
                 );
                 let tcp: TcpSession = TcpSession {
                     stream: Box::new(Unsplit { s: send, r: recv }),
