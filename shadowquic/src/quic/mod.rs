@@ -47,20 +47,24 @@ impl Default for Stats {
 }
 
 impl Stats {
+    #[inline]
     pub fn connection_opened(&self) {
         self.total_connections.fetch_add(1, Ordering::Relaxed);
         self.active_connections.fetch_add(1, Ordering::Relaxed);
     }
 
+    #[inline]
     pub fn connection_closed(&self) {
         self.active_connections.fetch_sub(1, Ordering::Relaxed);
     }
 
+    #[inline]
     pub fn packet_sent(&self, size: usize) {
         self.total_packets_sent.fetch_add(1, Ordering::Relaxed);
         self.total_bytes_sent.fetch_add(size, Ordering::Relaxed);
     }
 
+    #[inline]
     pub fn packet_received(&self, size: usize) {
         self.total_packets_received.fetch_add(1, Ordering::Relaxed);
         self.total_bytes_received.fetch_add(size, Ordering::Relaxed);
