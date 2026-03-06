@@ -30,18 +30,18 @@ jobs:
             target: x86_64-unknown-linux-gnu
             release-name: x86_64-linux
             tool: cross
-            rustflags: "-C target-cpu=x86-64-v3 -C target-feature=+sse,+sse2"
+            rustflags: "-C target-cpu=nehalem -C target-feature=+sse,+sse2"
           - os: ubuntu-latest
             target: i686-unknown-linux-gnu
             release-name: i686-linux
             tool: cross
             rustflags: "-C target-feature=+sse,+sse2"
-          # Linux x86 musl
+          # Linux x86 musl (compatible with older CPUs like J4125)
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
             release-name: x86_64-linux-musl
             tool: cross
-            rustflags: "-C target-cpu=x86-64-v3 -C target-feature=+sse,+sse2"
+            rustflags: "-C target-cpu=nehalem -C target-feature=+sse,+sse2"
           - os: ubuntu-latest
             target: i686-unknown-linux-musl
             release-name: i686-linux-musl
