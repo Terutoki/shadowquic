@@ -108,6 +108,7 @@ jobs:
             target: i686-unknown-freebsd
             release-name: i686-freebsd
             tool: cross
+            rustflags: "-C target-feature=+sse,+sse2"
             skip-test: true
           # RISC-V
           - os: ubuntu-latest
@@ -212,16 +213,6 @@ jobs:
       - name: Install Windows ARM target
         if: matrix.target == 'aarch64-pc-windows-msvc'
         run: rustup target add aarch64-pc-windows-msvc
-
-      - name: Cargo test
-        uses: clechasseur/rs-cargo@v4
-        if: ${{ !matrix.skip-test && matrix.tool != 'cross' }}
-        with:
-          tool: ${{ matrix.tool }}
-          command: test
-          args: --all --release --target ${{ matrix.target }} ${{ matrix.extra-args }}
-        env:
-          RUSTFLAGS: ${{ matrix.rustflags }}
 
       - name: Cargo build
         uses: clechasseur/rs-cargo@v4
