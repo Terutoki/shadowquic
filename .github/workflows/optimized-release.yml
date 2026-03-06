@@ -1,0 +1,130 @@
+name: Optimized Release (PGO)
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Target platform (e.g., x86_64-unknown-linux-gnu)'
+        required: true
+        default: 'x86_64-unknown-linux-gnu'
+      profile_workload:
+        description: 'Run profiling workload'
+        required: false
+        default: 'false'
+        type: boolean
+
+env:
+  PACKAGE: "shadowquic"
+  RUST_TOOLCHAIN: "stable"
+
+jobs:
+  optimized-build:
+    name: Optimized Build with PGO
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: true
+
+      - uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ./target
+          key: optimized-${{ inputs.target }}-${{ hashFiles('**/Cargo.toml') }}
+          restore-keys: |
+            optimized-${{ inputs.target }}
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: ${{ inputs.target }}
+          components: llvm-tools-preview
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y llvm clang lld
+
+      # Step 1: Build instrumented binary
+      - name: Build instrumented binary
+        run: |
+          mkdir -p target/profdata
+          RUSTFLAGS="-C target-cpu=native -C profile-generate=target/profdata" \
+            cargo build --release --target ${{ inputs.target }}
+          cp target/${{ inputs.target }}/release/${{ env.PACKAGE }} target/${{ env.PACKAGE }}.instrumented
+
+      # Step 2: Run profiling workload
+      - name: Run profiling workload
+        if: inputs.profile_workload == 'true'
+        run: |
+          # Start server for profiling
+          ./target/${{ env.PACKAGE }}.instrumented --config config.example.yaml &
+          SERVER_PID=$!
+          
+          # Run workload (adjust as needed)
+          sleep 5
+          # Add your workload here, e.g.:
+          # iperf3 -c localhost -t 10
+          
+          # Stop server
+          kill $SERVER_PID || true
+
+      # Step 3: Merge profile data
+      - name: Merge profile data
+        run: |
+          llvm-profdata merge -o target/profdata/merged.profdata target/profdata/*.profraw
+
+      # Step 4: Build optimized binary with PGO
+      - name: Build optimized binary with PGO
+        run: |
+          RUSTFLAGS="-C target-cpu=native -C profile-use=target/profdata/merged.profdata" \
+            cargo build --release --target ${{ inputs.target }}
+
+      - name: Rename binary
+        run: mv target/${{ inputs.target }}/release/${{ env.PACKAGE }} ${{ env.PACKAGE }}-${{ inputs.target }}-optimized
+
+      - name: Upload optimized binary
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ env.PACKAGE }}-${{ inputs.target }}-optimized
+          path: ${{ env.PACKAGE }}-${{ inputs.target }}-optimized
+
+      - name: Upload profile data
+        uses: actions/upload-artifact@v6
+        with:
+          name: profdata-${{ inputs.target }}
+          path: target/profdata/merged.profdata
+
+  # BOLT optimization (optional, requires special setup)
+  bolt-optimize:
+    name: BOLT Optimization
+    needs: optimized-build
+    runs-on: ubuntu-latest
+    if: false  # Disabled by default, enable manually if needed
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install BOLT
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y llvm-bolt
+
+      - name: Download binary
+        uses: actions/download-artifact@v7
+        with:
+          name: shadowquic-x86_64-unknown-linux-gnu-optimized
+          path: ./binaries
+
+      - name: Make executable
+        run: chmod +x ./binaries/shadowquic-x86_64-unknown-linux-gnu-optimized
+
+      # Note: BOLT requires actual workload execution
+      # This is a placeholder for manual optimization
+      - name: BOLT optimize
+        run: |
+          echo "BOLT optimization requires actual workload execution"
+          echo "Run this manually with perf profiling enabled"

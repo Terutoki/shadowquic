@@ -42,7 +42,78 @@ jobs:
             target: x86_64-unknown-linux-gnu
             release-name: x86_64-linux
             tool: cross
-            # extra-args: "--features jemallocator"
+            rustflags: "-C target-cpu=x86-64-v3"
+          - os: ubuntu-latest
+            target: i686-unknown-linux-gnu
+            release-name: i686-linux
+            tool: cross
+          # Linux x86 musl
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            release-name: x86_64-linux-musl
+            tool: cross
+            rustflags: "-C target-cpu=x86-64-v3"
+          - os: ubuntu-latest
+            target: i686-unknown-linux-musl
+            release-name: i686-linux-musl
+            tool: cross
+            extra-args: "--no-default-features --features ring"
+          # Linux arm
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            release-name: aarch64-linux
+            tool: cross
+          - os: ubuntu-latest
+            target: armv7-unknown-linux-gnueabi
+            release-name: armv7-linux
+            tool: cross
+            extra-args: "--no-default-features --features ring"
+          - os: ubuntu-latest
+            target: armv7-unknown-linux-gnueabihf
+            release-name: armv7-linux-hf
+            tool: cross
+            extra-args: "--no-default-features --features ring"
+          # Linux arm musl
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-musl
+            release-name: aarch64-linux-musl
+            tool: cross
+          - os: ubuntu-latest
+            target: armv7-unknown-linux-musleabi
+            release-name: armv7-linux-musl
+            tool: cross
+            extra-args: "--no-default-features --features ring"
+          - os: ubuntu-latest
+            target: armv7-unknown-linux-musleabihf
+            release-name: armv7-linux-muslhf
+            tool: cross
+            extra-args: "--no-default-features --features ring"
+          # Windows
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            release-name: x86_64-windows
+            postfix: ".exe"
+            rustflags: "-C target-cpu=x86-64-v3"
+          - os: windows-latest
+            target: i686-pc-windows-msvc
+            release-name: i686-windows
+            postfix: ".exe"
+            extra-args: "--no-default-features --features ring"
+          # Windows Arm
+          - os: windows-latest
+            target: aarch64-pc-windows-msvc
+            release-name: aarch64-windows
+            postfix: ".exe"
+            skip-test: true
+          # MacOSX
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            release-name: x86_64-darwin
+            rustflags: "-C target-cpu=x86-64-v3"
+          - os: macos-14
+            target: aarch64-apple-darwin
+            release-name: aarch64-darwin
+            rustflags: "-C target-cpu=apple-m1"
           - os: ubuntu-latest
             target: i686-unknown-linux-gnu
             release-name: i686-linux
@@ -258,7 +329,11 @@ jobs:
           command: build
           args: --workspace --release --target ${{ matrix.target }} ${{ matrix.extra-args }}
         env:
-          RUSTFLAGS: ${{ matrix.rustflags }}
+          RUSTFLAGS: ${{ matrix.rustflags || '-C target-cpu=generic -C opt-level=3' }}
+          CARGO_PROFILE_RELEASE_LTO: fat
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 1
+          CARGO_PROFILE_RELEASE_STRIP: true
+          CARGO_PROFILE_RELEASE_PANIC: abort
 
       - name: Rename binary
         run: mv target/${{ matrix.target }}/release/${{ env.PACKAGE }}${{ matrix.postfix }} ${{ env.PACKAGE }}-${{ matrix.release-name || matrix.target }}${{ matrix.postfix }}
