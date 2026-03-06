@@ -154,16 +154,18 @@ impl DirectOut {
         let dns_cache = DnsResolve::default();
         let dns_cache_clone = dns_cache.clone();
         let dns_strategy = self.cfg.dns_strategy.clone();
+        let send_buf = BytesMut::with_capacity(65535);
         let fut1 = async move {
+            let mut buf_send = send_buf;
             loop {
-                let mut buf_send = BytesMut::with_capacity(65535);
+                buf_send.clear();
                 buf_send.resize(65535, 0);
                 //trace!("recv upstream");
                 let (len, dst) = upstream.recv_from(&mut buf_send).await?;
                 //trace!("udp request reply from:{}", dst);
                 let dst = dns_cache_clone.inv_resolve(&dst).await;
                 //trace!("udp source inverse resolved to:{}", dst);
-                let buf = buf_send.freeze();
+                let buf = buf_send.split().freeze();
                 //trace!("udp recved:{} bytes", len);
                 let _ = udp_session.send.send_to(buf.slice(..len), dst).await?;
             }

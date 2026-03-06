@@ -284,8 +284,8 @@ pub async fn handle_udp_send<C: QuicConnection>(
     let mut down_stream = udp_recv;
     let mut session = AssociateSendSession {
         id_store: conn.send_id_store.clone(),
-        dst_map: Default::default(),
-        unistream_map: Default::default(),
+        dst_map: AHashMap::with_capacity(16),
+        unistream_map: AHashMap::with_capacity(16),
     };
     let quic_conn = conn.conn.clone();
     STATS.connection_opened();
@@ -347,7 +347,7 @@ pub async fn handle_udp_recv_ctrl<C: QuicConnection>(
 ) -> Result<(), SError> {
     let mut session = AssociateRecvSession {
         id_store: conn.recv_id_store.clone(),
-        id_map: Default::default(),
+        id_map: AHashMap::with_capacity(16),
     };
     loop {
         let SQUdpControlHeader { id, dst } = SQUdpControlHeader::decode(&mut recv).await?;
