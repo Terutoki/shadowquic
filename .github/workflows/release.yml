@@ -313,13 +313,12 @@ jobs:
 
       - name: Cargo test
         uses: clechasseur/rs-cargo@v4
-        if: ${{ !matrix.skip-test }}
+        if: ${{ !matrix.skip-test && matrix.tool != 'cross' }}
         with:
           tool: ${{ matrix.tool }}
           command: test
           args: --all --release --target ${{ matrix.target }} ${{ matrix.extra-args }}
         env:
-          CROSS_CONTAINER_OPTS: "--network host"
           RUSTFLAGS: ${{ matrix.rustflags }}
 
       - name: Cargo build
@@ -329,6 +328,7 @@ jobs:
           command: build
           args: --workspace --release --target ${{ matrix.target }} ${{ matrix.extra-args }}
         env:
+          CARGO_TERM_COLOR: always
           RUSTFLAGS: ${{ matrix.rustflags || '-C target-cpu=generic -C opt-level=3' }}
           CARGO_PROFILE_RELEASE_LTO: fat
           CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 1
