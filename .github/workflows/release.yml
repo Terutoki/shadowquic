@@ -25,18 +25,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Example
-          # when not set, default will be used (except target, cross)
-          # - os: ubuntu-latest
-          #   target: x86_64-unknown-linux-gnu
-          #   release-name: x86_64-linux
-          #   toolchain: stable
-          #   tool: cross
-          #   postfix: ""
-          #   extra-args: ""
-          #   components: ""
-          #   rustflags: ""
-
           # Linux x86
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
@@ -57,7 +45,6 @@ jobs:
             target: i686-unknown-linux-musl
             release-name: i686-linux-musl
             tool: cross
-            extra-args: "--no-default-features --features ring"
           # Linux arm
           - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
@@ -67,12 +54,10 @@ jobs:
             target: armv7-unknown-linux-gnueabi
             release-name: armv7-linux
             tool: cross
-            extra-args: "--no-default-features --features ring"
           - os: ubuntu-latest
             target: armv7-unknown-linux-gnueabihf
             release-name: armv7-linux-hf
             tool: cross
-            extra-args: "--no-default-features --features ring"
           # Linux arm musl
           - os: ubuntu-latest
             target: aarch64-unknown-linux-musl
@@ -82,12 +67,10 @@ jobs:
             target: armv7-unknown-linux-musleabi
             release-name: armv7-linux-musl
             tool: cross
-            extra-args: "--no-default-features --features ring"
           - os: ubuntu-latest
             target: armv7-unknown-linux-musleabihf
             release-name: armv7-linux-muslhf
             tool: cross
-            extra-args: "--no-default-features --features ring"
           # Windows
           - os: windows-latest
             target: x86_64-pc-windows-msvc
@@ -98,7 +81,6 @@ jobs:
             target: i686-pc-windows-msvc
             release-name: i686-windows
             postfix: ".exe"
-            extra-args: "--no-default-features --features ring"
           # Windows Arm
           - os: windows-latest
             target: aarch64-pc-windows-msvc
@@ -114,100 +96,28 @@ jobs:
             target: aarch64-apple-darwin
             release-name: aarch64-darwin
             rustflags: "-C target-cpu=apple-m1"
-          - os: ubuntu-latest
-            target: i686-unknown-linux-gnu
-            release-name: i686-linux
-            tool: cross
-            # extra-args: "--features jemallocator"
-          # Linux x86 musl
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-musl
-            release-name: x86_64-linux-musl
-            tool: cross
-            # extra-args: "--features jemallocator"
-          - os: ubuntu-latest
-            target: i686-unknown-linux-musl
-            release-name: i686-linux-musl
-            tool: cross
-            # extra-args: "--no-default-features --features ring"
-          # Linux arm
-          - os: ubuntu-latest
-            target: aarch64-unknown-linux-gnu
-            release-name: aarch64-linux
-            tool: cross
-            # extra-args: "--features jemallocator"
-          - os: ubuntu-latest
-            target: armv7-unknown-linux-gnueabi
-            release-name: armv7-linux
-            tool: cross
-            # extra-args: "--no-default-features --features ring"
-          - os: ubuntu-latest
-            target: armv7-unknown-linux-gnueabihf
-            release-name: armv7-linux-hf
-            tool: cross
-            # extra-args: "--no-default-features --features ring"
-          # Linux arm musl
-          - os: ubuntu-latest
-            target: aarch64-unknown-linux-musl
-            release-name: aarch64-linux-musl
-            tool: cross
-            # extra-args: "--features jemallocator"
-          - os: ubuntu-latest
-            target: armv7-unknown-linux-musleabi
-            release-name: armv7-linux-musl
-            tool: cross
-            # extra-args: "--no-default-features --features ring"
-          - os: ubuntu-latest
-            target: armv7-unknown-linux-musleabihf
-            release-name: armv7-linux-muslhf
-            tool: cross
-            # extra-args: "--no-default-features --features ring"
-          # Windows
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            release-name: x86_64-windows
-            postfix: ".exe"
-          - os: windows-latest
-            target: i686-pc-windows-msvc
-            release-name: i686-windows
-            postfix: ".exe"
-            # extra-args: "--no-default-features --features ring"
-          # Windows Arm
-          - os: windows-latest
-            target: aarch64-pc-windows-msvc
-            release-name: aarch64-windows
-            postfix: ".exe"
-            skip-test: true
-          # MacOSX
-          - os: macos-15-intel
-            target: x86_64-apple-darwin
-            release-name: x86_64-darwin
-            # extra-args: "--features jemallocator"
-          - os: macos-14
-            target: aarch64-apple-darwin
-            release-name: aarch64-darwin
-            # extra-args: "--features jemallocator"
           # FreeBSD
           - os: ubuntu-latest
             target: x86_64-unknown-freebsd
             release-name: x86_64-freebsd
             tool: cross
             skip-test: true
-            # extra-args: "--no-default-features --features ring"
+          - os: ubuntu-latest
+            target: i686-unknown-freebsd
+            release-name: i686-freebsd
+            tool: cross
+            skip-test: true
           # RISC-V
           - os: ubuntu-latest
             target: riscv64gc-unknown-linux-gnu
             release-name: riscv64gc-linux
             tool: cross
-            # extra-args: "--no-default-features --features ring"
-          # Loongarch64 ring problem
+          # Loongarch64
           - os: ubuntu-latest
             target: loongarch64-unknown-linux-gnu
             release-name: loongarch64-linux
             tool: cross
-            # extra-args: "--no-default-features --features ring"
           # Android
-          # There is dns problem on android due to cross/qemu/docker
           - os: ubuntu-latest
             target: aarch64-linux-android
             release-name: aarch64-android
@@ -222,19 +132,12 @@ jobs:
             target: i686-linux-android
             release-name: i686-android
             tool: cross
-            skip-test: true            
+            skip-test: true
           - os: ubuntu-latest
             target: x86_64-linux-android
             release-name: x86_64-android
             tool: cross
-            skip-test: true  
-          # Skip test due to limitation of cross
-          - os: ubuntu-latest
-            target: i686-unknown-freebsd
-            release-name: i686-freebsd
-            tool: cross  
             skip-test: true
-
           # Linux mips
           - os: ubuntu-latest
             target: mips-unknown-linux-musl
@@ -272,8 +175,6 @@ jobs:
             components: rust-src, rustfmt
             extra-args: "-Z build-std=std,panic_abort"
             skip-test: true
-          # Windows gnu: tokio dont work
-          # Windows aarch: todo
 
     steps:
       - uses: actions/checkout@v6
@@ -306,7 +207,6 @@ jobs:
         env:
           TARGET: ${{ matrix.target }}
 
-      # Don't know why it's not installed
       - name: Install Windows ARM target
         if: matrix.target == 'aarch64-pc-windows-msvc'
         run: rustup target add aarch64-pc-windows-msvc
@@ -373,9 +273,7 @@ jobs:
         if: startsWith(github.ref, 'refs/heads/dev')
         run: |
           gh release delete latest --cleanup-tag --yes --repo $GITHUB_REPOSITORY || true
-          # Move latest tag to current commit locally
           git tag -d latest || true
-          # Create local tag
           git tag latest
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -383,7 +281,6 @@ jobs:
       - name: Clean git tag
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
-          # Delete latest tag locally (for git-cliff)
           git tag -d latest || true
 
       - name: Generate a changelog
