@@ -16,10 +16,12 @@ description = "A 0-RTT QUIC Proxy with SNI camouflage"
 license = "MIT"
 readme = "README.md"
 
+# Optimized release profile
 [profile.release]
-lto = "thin"
+lto = "fat"
 codegen-units = 1
 opt-level = 3
 strip = true
+panic = "abort"
 
 [workspace.dependencies]
