@@ -36,7 +36,7 @@ jobs:
             release-name: i686-linux
             tool: cross
             rustflags: "-C target-feature=+sse,+sse2"
-          # Linux x86 musl (compatible with older CPUs like J4125)
+          # Linux x86 musl (compatible with older CPUs like J1900 and J4125)
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
             release-name: x86_64-linux-musl
