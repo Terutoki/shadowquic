@@ -41,12 +41,12 @@ jobs:
             target: x86_64-unknown-linux-musl
             release-name: x86_64-linux-musl-j1900
             tool: cross
-            rustflags: "-C target-cpu=nehalem -C target-feature=+sse,+sse2"
+            rustflags: "-C target-cpu=nehalem -C target-feature=+sse4.1"
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
             release-name: x86_64-linux-musl-j4125
             tool: cross
-            rustflags: "-C target-cpu=goldmont -C target-feature=+sse,+sse2"
+            rustflags: "-C target-cpu=goldmont -C target-feature=+aes,+pclmulqdq,+sse4.2"
           - os: ubuntu-latest
             target: i686-unknown-linux-musl
             release-name: i686-linux-musl
