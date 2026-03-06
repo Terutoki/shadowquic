@@ -76,13 +76,26 @@ jobs:
       # Step 3: Merge profile data
       - name: Merge profile data
         run: |
-          llvm-profdata merge -o target/profdata/merged.profdata target/profdata/*.profraw
+          if ls target/profdata/*.profraw 1> /dev/null 2>&1; then
+            llvm-profdata merge -o target/profdata/merged.profdata target/profdata/*.profraw
+            echo "PROFILE_FOUND=true" >> $GITHUB_ENV
+          else
+            echo "No profile data found. Building optimized binary without PGO."
+            echo "PROFILE_FOUND=false" >> $GITHUB_ENV
+          fi
 
-      # Step 4: Build optimized binary with PGO
-      - name: Build optimized binary with PGO
+      # Step 4: Build optimized binary with PGO (or without if no profile data)
+      - name: Build optimized binary
         run: |
-          RUSTFLAGS="-C target-cpu=native -C profile-use=target/profdata/merged.profdata" \
-            cargo build --release --target ${{ inputs.target }}
+          if [ "$PROFILE_FOUND" = "true" ]; then
+            echo "Building with PGO..."
+            RUSTFLAGS="-C target-cpu=native -C profile-use=target/profdata/merged.profdata" \
+              cargo build --release --target ${{ inputs.target }}
+          else
+            echo "Building without PGO (no profile data)..."
+            RUSTFLAGS="-C target-cpu=native" \
+              cargo build --release --target ${{ inputs.target }}
+          fi
 
       - name: Rename binary
         run: mv target/${{ inputs.target }}/release/${{ env.PACKAGE }} ${{ env.PACKAGE }}-${{ inputs.target }}-optimized
@@ -92,12 +105,15 @@ jobs:
         with:
           name: ${{ env.PACKAGE }}-${{ inputs.target }}-optimized
           path: ${{ env.PACKAGE }}-${{ inputs.target }}-optimized
+          if-no-files-found: error
 
       - name: Upload profile data
+        if: env.PROFILE_FOUND == 'true'
         uses: actions/upload-artifact@v6
         with:
           name: profdata-${{ inputs.target }}
           path: target/profdata/merged.profdata
+          if-no-files-found: ignore
 
   # BOLT optimization (optional, requires special setup)
   bolt-optimize:
