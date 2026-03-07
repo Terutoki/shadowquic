@@ -30,9 +30,9 @@ impl DualSocket {
                 .set_only_v6(false)
                 .map_err(|x| tracing::warn!("set dual stack for failed: {}", x));
         };
-        
+
         socket.set_reuse_address(true)?;
-        
+
         socket.set_nonblocking(true)?;
         socket.bind(&addr.into())?;
 

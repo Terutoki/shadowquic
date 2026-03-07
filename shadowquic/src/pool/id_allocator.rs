@@ -1,7 +1,7 @@
 use crossbeam::queue::SegQueue;
 use slab::Slab;
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 const INITIAL_CAPACITY: usize = 4096;
 
@@ -37,7 +37,7 @@ impl<T> IdAllocator<T> {
         if id as usize >= slab.len() {
             let new_capacity = ((id as usize) + 1024).next_power_of_two();
             let mut new_slab = Slab::with_capacity(new_capacity);
-            for i in 0..new_capacity {
+            for _i in 0..new_capacity {
                 new_slab.insert(unsafe { std::mem::zeroed() });
             }
             *slab = new_slab;

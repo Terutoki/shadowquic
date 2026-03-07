@@ -1,4 +1,4 @@
-#[cfg(feature = "jemalloc")]
+#[cfg(feature = "jemallocator")]
 #[global_allocator]
 static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
 

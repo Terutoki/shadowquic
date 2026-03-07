@@ -1,15 +1,15 @@
 use std::{io::Cursor, net::SocketAddr, sync::Arc};
 
 use async_trait::async_trait;
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::{BufMut, Bytes};
 use tokio::{net::UdpSocket, sync::OnceCell};
 use tracing::warn;
 
 use crate::{
     UdpRecv, UdpSend,
+    arena::packet_buf_sized,
     error::SError,
     msgs::socks5::{self, SocksAddr, UdpReqHeader},
-    utils::buffer::alloc_buffer,
 };
 
 use crate::msgs::{SDecode, SEncode};
@@ -22,10 +22,7 @@ pub struct UdpSocksWrap(Arc<UdpSocket>, OnceCell<SocketAddr>); // remote addr
 impl UdpRecv for UdpSocksWrap {
     async fn recv_from(&mut self) -> Result<(Bytes, SocksAddr), SError> {
         // Use buffer pool for allocation
-        let mut buf = alloc_buffer();
-        if buf.capacity() < 2000 {
-            buf = BytesMut::with_capacity(2000);
-        }
+        let mut buf = packet_buf_sized(2000);
         buf.resize(2000, 0);
 
         let (len, dst) = self.0.recv_from(&mut buf).await?;
@@ -57,12 +54,10 @@ impl UdpSend for UdpSocksWrap {
         };
         let mut header = Vec::with_capacity(64);
         reply.encode(&mut header).await?;
-        
+
         // Use buffer pool
-        let mut buf_new = alloc_buffer();
-        if buf_new.capacity() < header.len() + buf.len() {
-            buf_new = BytesMut::with_capacity(header.len() + buf.len());
-        }
+        let total_size = header.len() + buf.len();
+        let mut buf_new = packet_buf_sized(total_size);
         buf_new.put_slice(&header);
         buf_new.put(buf);
 

@@ -1,6 +1,6 @@
 use bytes::BytesMut;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 const DEFAULT_POOL_SIZE: usize = 1024;
 const BUFFER_SIZE: usize = 2048;

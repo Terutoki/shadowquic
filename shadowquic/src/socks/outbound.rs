@@ -130,8 +130,7 @@ impl SocksClient {
         socksreq.encode(&mut tcp).await?;
         let _rep = CmdReply::decode(&mut tcp).await?;
         tracing::trace!("socks tcp connection established");
-        copy_bidirectional_with_sizes(&mut tcp, &mut tcp_session.stream, 262144, 262144)
-            .await?;
+        copy_bidirectional_with_sizes(&mut tcp, &mut tcp_session.stream, 262144, 262144).await?;
         Ok(())
     }
 
@@ -191,11 +190,7 @@ impl SocksClient {
         let fut1 = async move {
             loop {
                 let (buf, dst) = upstream.recv_from().await?;
-                trace!(
-                    "RECV from upstream: {} bytes, dst={}",
-                    buf.len(),
-                    dst
-                );
+                trace!("RECV from upstream: {} bytes, dst={}", buf.len(), dst);
                 let _ = udp_session.send.send_to(buf, dst).await?;
             }
             #[allow(unreachable_code)]
@@ -204,11 +199,7 @@ impl SocksClient {
         let fut2 = async move {
             loop {
                 let (buf, dst) = udp_session.recv.recv_from().await?;
-                trace!(
-                    "SEND to upstream: {} bytes, dst={}",
-                    buf.len(),
-                    dst
-                );
+                trace!("SEND to upstream: {} bytes, dst={}", buf.len(), dst);
                 let _ = upstream_clone.send_to(buf, dst).await?;
             }
             #[allow(unreachable_code)]

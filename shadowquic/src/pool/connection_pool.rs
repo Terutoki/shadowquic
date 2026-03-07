@@ -1,18 +1,16 @@
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use parking_lot::RwLock;
 use rustc_hash::FxHasher;
 
 use crate::error::SError;
-use crate::msgs::socks5::SocksAddr;
 use crate::quic::{QuicConnection, QuicErrorRepr};
 
-const DEFAULT_SHARD_COUNT: usize = 8;
 const DEFAULT_SHARD_CAPACITY: usize = 64;
 
 #[derive(Clone)]
@@ -83,8 +81,8 @@ pub struct ConnectionState<C> {
     conn: RwLock<Option<C>>,
     in_use: AtomicBool,
     last_used: RwLock<Instant>,
-    created_at: Instant,
-    remote_addr: SocketAddr,
+    _created_at: Instant,
+    _remote_addr: SocketAddr,
 }
 
 impl<C> ConnectionState<C> {
@@ -93,8 +91,8 @@ impl<C> ConnectionState<C> {
             conn: RwLock::new(Some(conn)),
             in_use: AtomicBool::new(false),
             last_used: RwLock::new(Instant::now()),
-            created_at: Instant::now(),
-            remote_addr,
+            _created_at: Instant::now(),
+            _remote_addr: remote_addr,
         }
     }
 
@@ -119,7 +117,7 @@ impl<C> ConnectionState<C> {
     pub fn is_expired(&self, config: &PoolConfig) -> bool {
         let idle = *self.last_used.read();
         let in_use = self.in_use.load(Ordering::Acquire);
-        
+
         !in_use && idle.elapsed() > config.idle_timeout
     }
 
@@ -127,7 +125,7 @@ impl<C> ConnectionState<C> {
         self.conn.write().take()
     }
 
-    pub fn connection(&self) -> Option<parking_lot::RwLockReadGuard<Option<C>>> {
+    pub fn connection(&self) -> Option<parking_lot::RwLockReadGuard<'_, Option<C>>> {
         Some(self.conn.read())
     }
 }
@@ -158,7 +156,11 @@ impl<C: QuicConnection> ShardedConnectionPool<C> {
         &self.shards[(hasher.finish() as usize) & self.shard_mask]
     }
 
-    pub async fn get<F, Fut>(&self, addr: SocketAddr, connect_fn: F) -> Result<Arc<ConnectionState<C>>, SError>
+    pub async fn get<F, Fut>(
+        &self,
+        addr: SocketAddr,
+        connect_fn: F,
+    ) -> Result<Arc<ConnectionState<C>>, SError>
     where
         F: FnOnce() -> Fut,
         Fut: std::future::Future<Output = Result<C, QuicErrorRepr>>,
@@ -173,7 +175,7 @@ impl<C: QuicConnection> ShardedConnectionPool<C> {
 
     pub fn stats(&self) -> PooledConnectionStats {
         let mut total = PooledConnectionStats::default();
-        
+
         for shard in &self.shards {
             total.total += shard.stats.total_connections.load(Ordering::Relaxed);
             total.active += shard.stats.active_connections.load(Ordering::Relaxed);
@@ -182,13 +184,17 @@ impl<C: QuicConnection> ShardedConnectionPool<C> {
             total.errors += shard.stats.connection_errors.load(Ordering::Relaxed);
             total.timeouts += shard.stats.connection_timeouts.load(Ordering::Relaxed);
         }
-        
+
         total
     }
 }
 
 impl<C: QuicConnection> ConnectionShard<C> {
-    pub async fn get<F, Fut>(&self, addr: SocketAddr, connect_fn: F) -> Result<Arc<ConnectionState<C>>, SError>
+    pub async fn get<F, Fut>(
+        &self,
+        addr: SocketAddr,
+        connect_fn: F,
+    ) -> Result<Arc<ConnectionState<C>>, SError>
     where
         F: FnOnce() -> Fut,
         Fut: std::future::Future<Output = Result<C, QuicErrorRepr>>,
@@ -198,14 +204,16 @@ impl<C: QuicConnection> ConnectionShard<C> {
             if let Some(state) = connections.get(&addr) {
                 if state.try_acquire() {
                     *state.last_used.write() = Instant::now();
-                    self.stats.connection_acquires.fetch_add(1, Ordering::Relaxed);
+                    self.stats
+                        .connection_acquires
+                        .fetch_add(1, Ordering::Relaxed);
                     return Ok(Arc::clone(state));
                 }
             }
         }
 
         let mut connections = self.connections.write();
-        
+
         if let Some(state) = connections.get(&addr) {
             if state.try_acquire() {
                 *state.last_used.write() = Instant::now();
@@ -223,7 +231,9 @@ impl<C: QuicConnection> ConnectionShard<C> {
         let conn = tokio::time::timeout(self.config.connection_timeout, connect_fn())
             .await
             .map_err(|_| {
-                self.stats.connection_timeouts.fetch_add(1, Ordering::Relaxed);
+                self.stats
+                    .connection_timeouts
+                    .fetch_add(1, Ordering::Relaxed);
                 SError::OutboundUnavailable
             })?
             .map_err(|e| {
@@ -233,12 +243,16 @@ impl<C: QuicConnection> ConnectionShard<C> {
 
         let state = Arc::new(ConnectionState::new(conn, addr));
         state.try_acquire();
-        
+
         connections.insert(addr, Arc::clone(&state));
-        
+
         self.stats.total_connections.fetch_add(1, Ordering::Relaxed);
-        self.stats.active_connections.fetch_add(1, Ordering::Relaxed);
-        self.stats.connection_acquires.fetch_add(1, Ordering::Relaxed);
+        self.stats
+            .active_connections
+            .fetch_add(1, Ordering::Relaxed);
+        self.stats
+            .connection_acquires
+            .fetch_add(1, Ordering::Relaxed);
 
         Ok(state)
     }

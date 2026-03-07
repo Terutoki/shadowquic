@@ -23,11 +23,21 @@ pub mod squic;
 pub mod sunnyquic;
 pub mod utils;
 
+pub mod arena;
+pub mod id;
+pub mod metrics;
+
 pub use pool::{
-    BufferPool, IdAllocator, PoolConfig, PoolStats, PooledConnectionStats, SessionData,
-    SessionId, SessionIdGenerator, SessionManager, SessionStats, SessionStatsSnapshot, SessionType,
+    BufferPool, IdAllocator, PoolConfig, PoolStats, PooledConnectionStats, SessionData, SessionId,
+    SessionIdGenerator, SessionManager, SessionStats, SessionStatsSnapshot, SessionType,
     ShardedConnectionPool, ShardedIdAllocator,
 };
+
+pub use arena::{
+    PACKET_ARENA, PacketArena, packet_buf, packet_buf_large, packet_buf_put, packet_buf_sized,
+};
+pub use id::{AtomicIdGenerator, IdGenerator, ShardedIdGenerator, free_udp_id, next_udp_id};
+pub use metrics::{GLOBAL_METRICS, Metrics, MetricsSnapshot};
 
 pub use msgs::SDecode;
 pub use msgs::SEncode;

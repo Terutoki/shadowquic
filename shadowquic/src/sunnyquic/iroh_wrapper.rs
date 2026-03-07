@@ -29,8 +29,7 @@ use crate::{
     error::{SError, SResult},
     quic::{
         MAX_CONCURRENT_BIDI_STREAMS, MAX_CONCURRENT_UNI_STREAMS, MAX_DATAGRAM_WINDOW,
-        MAX_SEND_WINDOW, MAX_STREAM_WINDOW, QuicClient, QuicConnection, QuicErrorRepr,
-        QuicServer,
+        MAX_SEND_WINDOW, MAX_STREAM_WINDOW, QuicClient, QuicConnection, QuicErrorRepr, QuicServer,
     },
     sunnyquic::dynamic_cert::DynamicCertResolver,
 };

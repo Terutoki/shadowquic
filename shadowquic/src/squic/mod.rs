@@ -7,7 +7,6 @@ use std::{
 };
 
 use ahash::AHashMap;
-use bytes::BytesMut;
 use tokio::{
     io::{AsyncReadExt, AsyncWrite, AsyncWriteExt},
     sync::{
@@ -15,9 +14,9 @@ use tokio::{
         watch::{Receiver, Sender, channel},
     },
 };
-use tracing::{debug, error, event, info, trace, Instrument, Level};
+use tracing::{Instrument, Level, debug, error, event, info, trace};
 
-use crate::utils::buffer::{alloc_buffer, alloc_large_buffer, free_large_buffer};
+use crate::arena::{packet_buf_large, packet_buf_sized};
 
 use crate::{
     AnyUdpRecv, AnyUdpSend,
@@ -279,24 +278,29 @@ pub async fn handle_udp_send<C: QuicConnection>(
     };
     let quic_conn = conn.conn.clone();
     STATS.connection_opened();
-    
+
     // Use global buffer pool for hot path
-    let mut datagram_buf = alloc_large_buffer();
+    let mut datagram_buf = packet_buf_large();
     let mut header_buf = Vec::with_capacity(64);
-    
+
     loop {
         let (bytes, dst) = down_stream.recv_from().await?;
         STATS.packet_sent(bytes.len());
-        
+
         let (id, is_new) = session.get_id_or_insert(&dst).await;
-        
+
         // Send control header first if new
         if is_new {
             header_buf.clear();
-            SQUdpControlHeader { dst: dst.clone(), id }.encode(&mut header_buf).await?;
+            SQUdpControlHeader {
+                dst: dst.clone(),
+                id,
+            }
+            .encode(&mut header_buf)
+            .await?;
             send.write_all(&header_buf).await?;
         }
-        
+
         if over_stream {
             use std::collections::hash_map::Entry;
             let uni_conn = match session.unistream_map.entry(dst.clone()) {
@@ -308,7 +312,9 @@ pub async fn handle_udp_send<C: QuicConnection>(
             };
             header_buf.clear();
             if is_new {
-                SQPacketDatagramHeader { id }.encode(&mut header_buf).await?;
+                SQPacketDatagramHeader { id }
+                    .encode(&mut header_buf)
+                    .await?;
             }
             (bytes.len() as u16).encode(&mut header_buf).await?;
             uni_conn.write_all(&header_buf).await?;
@@ -316,16 +322,17 @@ pub async fn handle_udp_send<C: QuicConnection>(
         } else {
             // Datagram path - zero-copy style
             header_buf.clear();
-            SQPacketDatagramHeader { id }.encode(&mut header_buf).await?;
+            SQPacketDatagramHeader { id }
+                .encode(&mut header_buf)
+                .await?;
             datagram_buf.clear();
             datagram_buf.extend_from_slice(&header_buf);
             datagram_buf.extend_from_slice(&bytes);
-            quic_conn.send_datagram(datagram_buf.split().freeze()).await?;
+            quic_conn
+                .send_datagram(datagram_buf.split().freeze())
+                .await?;
         }
     }
-    free_large_buffer(datagram_buf);
-    #[allow(unreachable_code)]
-    Ok(())
 }
 
 /// Handle udp ctrl stream receive task
@@ -363,7 +370,7 @@ pub async fn handle_udp_packet_recv<C: QuicConnection>(conn: SQConn<C>) -> Resul
             b = conn.read_datagram() => {
                 let b = b?;
                 STATS.packet_received(b.len());
-                
+
                 // Zero-copy: decode u16 id directly (2 bytes, big endian)
                 let id = u16::from_be_bytes([b[0], b[1]]);
                 let payload = b.slice(2..);
@@ -415,10 +422,7 @@ pub async fn handle_udp_packet_recv<C: QuicConnection>(conn: SQConn<C>) -> Resul
                 tokio::spawn(async move {
                     loop {
                         let l: usize = u16::decode(&mut uni_stream).await? as usize;
-                        let mut b = alloc_buffer();
-                        if b.capacity() < l {
-                            b = alloc_large_buffer();
-                        }
+                        let mut b = packet_buf_sized(l);
                         b.resize(l, 0);
                         uni_stream.read_exact(&mut b).await?;
                         udp.send_to(b.freeze(), addr.clone()).await?;

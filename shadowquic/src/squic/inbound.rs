@@ -106,12 +106,8 @@ impl<C: QuicConnection> SQServerConn<C> {
                     .send(ProxyRequest::Udp(udp))
                     .await
                     .map_err(|_| SError::OutboundUnavailable)?;
-                let fut1 = handle_udp_send(
-                    send,
-                    Box::new(local_recv),
-                    self.inner.clone(),
-                    over_stream,
-                );
+                let fut1 =
+                    handle_udp_send(send, Box::new(local_recv), self.inner.clone(), over_stream);
                 let fut2 = handle_udp_recv_ctrl(recv, local_send, self.inner);
                 tokio::try_join!(fut1, fut2)?;
             }
