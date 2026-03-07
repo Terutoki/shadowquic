@@ -11,7 +11,6 @@ use std::{
 };
 
 use ahash::AHashMap;
-use bytes::BytesMut;
 use tokio::{
     io::{AsyncReadExt, AsyncWrite, AsyncWriteExt},
     sync::{
@@ -22,6 +21,7 @@ use tokio::{
 use tracing::{Instrument, Level, debug, error, event, info, trace};
 
 use crate::{
+    utils::buffer::{alloc_buffer, alloc_large_buffer, free_large_buffer},
     AnyUdpRecv, AnyUdpSend,
     error::{SError, SResult},
     msgs::squic::SunnyCredential,
@@ -290,8 +290,8 @@ pub async fn handle_udp_send<C: QuicConnection>(
     let quic_conn = conn.conn.clone();
     STATS.connection_opened();
     
-    // Pre-allocate buffers for the hot path
-    let mut datagram_buf = BytesMut::with_capacity(2100);
+    // Use global buffer pool for hot path
+    let mut datagram_buf = alloc_large_buffer();
     let mut header_buf = Vec::with_capacity(64);
     
     loop {
@@ -333,6 +333,8 @@ pub async fn handle_udp_send<C: QuicConnection>(
             quic_conn.send_datagram(datagram_buf.split().freeze()).await?;
         }
     }
+    // Free buffers back to pool on exit
+    free_large_buffer(datagram_buf);
     #[allow(unreachable_code)]
     Ok(())
 }
@@ -424,8 +426,11 @@ pub async fn handle_udp_packet_recv<C: QuicConnection>(conn: SQConn<C>) -> Resul
                 tokio::spawn(async move {
                     loop {
                         let l: usize = u16::decode(&mut uni_stream).await? as usize;
-                        let mut b = BytesMut::with_capacity(l);
-                        b.resize(l,0);
+                        let mut b = alloc_buffer();
+                        if b.capacity() < l {
+                            b = alloc_large_buffer();
+                        }
+                        b.resize(l, 0);
                         uni_stream.read_exact(&mut b).await?;
                         udp.send_to(b.freeze(), addr.clone()).await?;
                     }

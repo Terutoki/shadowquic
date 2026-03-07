@@ -23,6 +23,12 @@ pub mod squic;
 pub mod sunnyquic;
 pub mod utils;
 
+pub use pool::{
+    BufferPool, IdAllocator, PoolConfig, PoolStats, PooledConnectionStats, SessionData,
+    SessionId, SessionIdGenerator, SessionManager, SessionStats, SessionStatsSnapshot, SessionType,
+    ShardedConnectionPool, ShardedIdAllocator,
+};
+
 pub use msgs::SDecode;
 pub use msgs::SEncode;
 pub enum ProxyRequest<T = AnyTcp, I = AnyUdpRecv, O = AnyUdpSend> {

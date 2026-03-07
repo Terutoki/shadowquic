@@ -1,3 +1,4 @@
+pub mod buffer;
 pub mod dual_socket;
 
 #[cfg(target_os = "android")]
