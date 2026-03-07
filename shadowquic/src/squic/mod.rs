@@ -317,15 +317,30 @@ pub async fn handle_udp_send<C: QuicConnection>(
                     .await?;
             }
             (bytes.len() as u16).encode(&mut header_buf).await?;
-            uni_conn.write_all(&header_buf).await?;
-            uni_conn.write_all(&bytes).await?;
+            // Single write with combined buffer - use stack-allocated small buffer
+            let combined_len = header_buf.len() + bytes.len();
+            if combined_len <= 128 {
+                // Small packet: combine on stack
+                let mut combined = [0u8; 128];
+                combined[..header_buf.len()].copy_from_slice(&header_buf);
+                combined[header_buf.len()..header_buf.len() + bytes.len()].copy_from_slice(&bytes);
+                uni_conn.write_all(&combined[..combined_len]).await?;
+            } else {
+                // Large packet: use arena buffer
+                let mut combined = packet_buf_sized(combined_len);
+                combined.extend_from_slice(&header_buf);
+                combined.extend_from_slice(&bytes);
+                uni_conn.write_all(&combined).await?;
+            }
         } else {
-            // Datagram path - zero-copy style
+            // Datagram path - optimized with pre-allocated size
             header_buf.clear();
             SQPacketDatagramHeader { id }
                 .encode(&mut header_buf)
                 .await?;
+            let total_len = header_buf.len() + bytes.len();
             datagram_buf.clear();
+            datagram_buf.reserve(total_len);
             datagram_buf.extend_from_slice(&header_buf);
             datagram_buf.extend_from_slice(&bytes);
             quic_conn
