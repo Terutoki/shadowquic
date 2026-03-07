@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -11,7 +11,7 @@ use crate::pool::id_allocator::SessionIdGenerator;
 use crate::pool::BufferPool;
 
 const DEFAULT_SESSION_CAPACITY: usize = 16384;
-const SESSION_EXPIRE_SECS: u64 = 60;
+const SESSION_EXPIRE_SECS: u32 = 60;
 
 pub struct SessionData {
     pub id: u32,
@@ -21,8 +21,8 @@ pub struct SessionData {
     pub created_at: Instant,
     pub last_active: RwLock<Instant>,
     pub in_use: AtomicBool,
-    pub bytes_sent: AtomicU64,
-    pub bytes_received: AtomicU64,
+    pub bytes_sent: AtomicU32,
+    pub bytes_received: AtomicU32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -47,8 +47,8 @@ pub struct SessionStats {
     pub udp_sessions: Arc<AtomicUsize>,
     pub sessions_created: Arc<AtomicUsize>,
     pub sessions_closed: Arc<AtomicUsize>,
-    pub bytes_sent: Arc<AtomicU64>,
-    pub bytes_received: Arc<AtomicU64>,
+    pub bytes_sent: Arc<AtomicU32>,
+    pub bytes_received: Arc<AtomicU32>,
 }
 
 impl SessionManager {
@@ -77,8 +77,8 @@ impl SessionManager {
             created_at: Instant::now(),
             last_active: RwLock::new(Instant::now()),
             in_use: AtomicBool::new(true),
-            bytes_sent: AtomicU64::new(0),
-            bytes_received: AtomicU64::new(0),
+            bytes_sent: AtomicU32::new(0),
+            bytes_received: AtomicU32::new(0),
         };
 
         self.sessions.write().insert(id, session);
@@ -110,8 +110,8 @@ impl SessionManager {
                 created_at: s.created_at,
                 last_active: RwLock::new(*s.last_active.read()),
                 in_use: AtomicBool::new(s.in_use.load(Ordering::Relaxed)),
-                bytes_sent: AtomicU64::new(s.bytes_sent.load(Ordering::Relaxed)),
-                bytes_received: AtomicU64::new(s.bytes_received.load(Ordering::Relaxed)),
+                bytes_sent: AtomicU32::new(s.bytes_sent.load(Ordering::Relaxed)),
+                bytes_received: AtomicU32::new(s.bytes_received.load(Ordering::Relaxed)),
             })
         })
     }
@@ -196,8 +196,8 @@ pub struct SessionStatsSnapshot {
     pub udp: usize,
     pub created: usize,
     pub closed: usize,
-    pub bytes_sent: u64,
-    pub bytes_received: u64,
+    pub bytes_sent: u32,
+    pub bytes_received: u32,
 }
 
 #[cfg(test)]
