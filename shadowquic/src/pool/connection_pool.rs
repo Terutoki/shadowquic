@@ -126,6 +126,10 @@ impl<C> ConnectionState<C> {
     pub fn take_connection(&self) -> Option<C> {
         self.conn.write().take()
     }
+
+    pub fn connection(&self) -> Option<parking_lot::RwLockReadGuard<Option<C>>> {
+        Some(self.conn.read())
+    }
 }
 
 impl<C: QuicConnection> ShardedConnectionPool<C> {

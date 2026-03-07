@@ -71,10 +71,7 @@ impl SunnyQuicClient {
             conn,
             authed: Arc::new(SetOnce::new()),
             send_id_store: Default::default(),
-            recv_id_store: IDStore {
-                id_counter: Default::default(),
-                inner: Default::default(),
-            },
+            recv_id_store: IDStore::default(),
         };
 
         let username = self.config.username.clone();

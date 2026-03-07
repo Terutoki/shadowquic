@@ -1,16 +1,13 @@
-//! This module is shared by sunnyquic and shadowquic
-//! It handles the general tcp/udp proxying logic over quic connection
-//! It contains an optional authentication feature for sunnyquic only
-
 use std::{
     collections::hash_map::{self, Entry},
     mem::replace,
     ops::Deref,
-    sync::{Arc, atomic::AtomicU16},
+    sync::Arc,
     time::Duration,
 };
 
 use ahash::AHashMap;
+use bytes::BytesMut;
 use tokio::{
     io::{AsyncReadExt, AsyncWrite, AsyncWriteExt},
     sync::{
@@ -18,10 +15,11 @@ use tokio::{
         watch::{Receiver, Sender, channel},
     },
 };
-use tracing::{Instrument, Level, debug, error, event, info, trace};
+use tracing::{debug, error, event, info, trace, Instrument, Level};
+
+use crate::utils::buffer::{alloc_buffer, alloc_large_buffer, free_large_buffer};
 
 use crate::{
-    utils::buffer::{alloc_buffer, alloc_large_buffer, free_large_buffer},
     AnyUdpRecv, AnyUdpSend,
     error::{SError, SResult},
     msgs::squic::SunnyCredential,
@@ -36,7 +34,7 @@ use crate::{
 pub mod inbound;
 pub mod outbound;
 
-/// SQuic connection, it is shared by shadowquic and sunnyquic and is a wrapper of quic connection.
+/// SQuic connection, it is shared by sunnyquic and shadowquic and is a wrapper of quic connection.
 /// It contains a connection object and two ID store for managing UDP sockets.
 /// The IDStore stores the mapping between ids and the destionation addresses as well as associated sockets
 #[derive(Clone)]
@@ -79,13 +77,21 @@ impl<T: QuicConnection> Deref for SQConn<T> {
 // Use watch channel here. Notify is not suitable here
 // see https://github.com/tokio-rs/tokio/issues/3757
 type IDStoreVal<T> = Result<T, Sender<()>>;
+
 /// IDStore is a thread-safe store for managing UDP sockets and their associated ids.
 /// It uses a HashMap to store the mapping between ids and the destination addresses as well as associated sockets.
 /// It also uses an atomic counter to generate unique ids for new sockets.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub(crate) struct IDStore<T = (AnyUdpSend, SocksAddr)> {
-    pub(crate) id_counter: Arc<AtomicU16>,
     pub(crate) inner: Arc<RwLock<AHashMap<u16, IDStoreVal<T>>>>,
+}
+
+impl<T> Default for IDStore<T> {
+    fn default() -> Self {
+        Self {
+            inner: Arc::new(RwLock::new(AHashMap::with_capacity(64))),
+        }
+    }
 }
 
 impl<T> IDStore<T>
@@ -96,8 +102,6 @@ where
         if let Some(r) = self.inner.read().await.get(&id) {
             r.clone().map_err(|x| x.subscribe())
         } else {
-            // Need to recheck
-            // During change from read lock to write lock, hashmap may be modified
             match self.inner.write().await.entry(id) {
                 Entry::Occupied(occupied_entry) => {
                     occupied_entry.get().clone().map_err(|x| x.subscribe())
@@ -124,11 +128,9 @@ where
         match self.get_socket_or_notify(id).await {
             Ok(r) => Ok(r),
             Err(mut n) => {
-                // This may fail is UDP session is closed right at this moment.
                 n.changed()
                     .await
                     .map_err(|_| SError::UDPSessionClosed(String::from("notify sender dropped")))?;
-                //
                 let ret = self
                     .try_get_socket(id)
                     .await
@@ -148,10 +150,9 @@ where
                 }
                 Err(_) => {
                     let notify = replace(s, Ok(val));
-                    //let _ = notify.map_err(|x| x.notify_one());
                     match notify {
                         Ok(_) => {
-                            panic!("should be notify"); // should never happen
+                            panic!("should be notify");
                         }
                         Err(n) => {
                             n.send(()).unwrap();
@@ -163,21 +164,6 @@ where
         } else {
             h.insert(id, Ok(val));
         }
-    }
-    async fn fetch_new_id(&self, val: T) -> u16 {
-        let mut inner = self.inner.write().await;
-        trace!("sending side socket number: {}", inner.len());
-        let mut r;
-        loop {
-            r = self
-                .id_counter
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst); // Wrapping occured if overflow
-            if let Entry::Vacant(e) = inner.entry(r) {
-                e.insert(Ok(val));
-                break;
-            }
-        }
-        r
     }
 }
 
@@ -196,7 +182,10 @@ impl<W: AsyncWrite> AssociateSendSession<W> {
         match self.dst_map.entry(addr.clone()) {
             Entry::Occupied(e) => (*e.get(), false),
             Entry::Vacant(e) => {
-                let id = self.id_store.fetch_new_id(()).await;
+                // Use simple counter for ID generation
+                static COUNTER: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(1);
+                let id = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                self.id_store.inner.write().await.insert(id, Ok(()));
                 e.insert(id);
                 trace!("send session: insert id:{}, addr:{}", id, addr);
                 (id, true)
@@ -228,6 +217,7 @@ impl<W: AsyncWrite> Drop for AssociateSendSession<W> {
         );
     }
 }
+
 /// AssociateRecvSession is a session for receiving UDP ctrl stream.
 /// It is created for each association task
 /// There are two usages for id_map
@@ -333,7 +323,6 @@ pub async fn handle_udp_send<C: QuicConnection>(
             quic_conn.send_datagram(datagram_buf.split().freeze()).await?;
         }
     }
-    // Free buffers back to pool on exit
     free_large_buffer(datagram_buf);
     #[allow(unreachable_code)]
     Ok(())

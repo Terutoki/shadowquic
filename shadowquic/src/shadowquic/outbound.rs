@@ -22,6 +22,7 @@ pub struct ShadowQuicClient {
     pub config: ShadowQuicClientCfg,
     pub quic_end: OnceCell<EndClient>,
 }
+
 impl ShadowQuicClient {
     pub fn new(cfg: ShadowQuicClientCfg) -> Self {
         Self {
@@ -30,9 +31,11 @@ impl ShadowQuicClient {
             config: cfg,
         }
     }
+
     pub async fn init_endpoint(&self, ipv6: bool) -> Result<EndClient, SError> {
         EndClient::new(&self.config, ipv6).await
     }
+
     pub fn new_with_socket(cfg: ShadowQuicClientCfg, socket: UdpSocket) -> Result<Self, SError> {
         Ok(Self {
             quic_end: OnceCell::from(EndClient::new_with_socket(&cfg, socket)?),
@@ -49,6 +52,7 @@ impl ShadowQuicClient {
             .unwrap_or_else(|_| panic!("resolve quic addr faile: {}", self.config.addr))
             .next()
             .unwrap_or_else(|| panic!("resolve quic addr faile: {}", self.config.addr));
+
         let conn = self
             .quic_end
             .get_or_init(|| async {
@@ -63,12 +67,10 @@ impl ShadowQuicClient {
         let conn = SQConn {
             conn,
             authed: Arc::new(SetOnce::new_with(Some(true))),
-            send_id_store: Default::default(),
-            recv_id_store: IDStore {
-                id_counter: Default::default(),
-                inner: Default::default(),
-            },
+            send_id_store: IDStore::default(),
+            recv_id_store: IDStore::default(),
         };
+
         let conn_clone = conn.clone();
         tokio::spawn(async move {
             let _ = handle_udp_packet_recv(conn_clone)
@@ -77,21 +79,21 @@ impl ShadowQuicClient {
         });
         Ok(conn)
     }
+
     async fn prepare_conn(&mut self) -> Result<(), SError> {
-        // delete connection if closed.
         self.quic_conn.take_if(|x| {
             x.close_reason().is_some_and(|x| {
                 info!("quic connection closed due to {}", x);
                 true
             })
         });
-        // Creating new connectin
         if self.quic_conn.is_none() {
             self.quic_conn = Some(self.get_conn().await?);
         }
         Ok(())
     }
 }
+
 #[async_trait]
 impl Outbound for ShadowQuicClient {
     async fn handle(&mut self, req: crate::ProxyRequest) -> Result<(), crate::error::SError> {

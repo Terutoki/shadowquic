@@ -42,10 +42,7 @@ impl ShadowQuicServer {
                 conn: incom,
                 authed: Arc::new(SetOnce::new_with(Some(true))),
                 send_id_store: Default::default(),
-                recv_id_store: IDStore {
-                    id_counter: Default::default(),
-                    inner: Default::default(),
-                },
+                recv_id_store: IDStore::default(),
             },
             users: Arc::new(Default::default()),
         };
