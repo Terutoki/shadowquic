@@ -1,39 +1,41 @@
-use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::time::Instant;
 
 use parking_lot::RwLock;
+use rustc_hash::FxHashMap;
 
 use crate::msgs::socks5::SocksAddr;
-use crate::pool::BufferPool;
 use crate::pool::id_allocator::SessionIdGenerator;
+use crate::pool::BufferPool;
 
 const DEFAULT_SESSION_CAPACITY: usize = 16384;
 const SESSION_EXPIRE_SECS: u32 = 60;
 
+#[derive(Clone)]
 pub struct SessionData {
     pub id: u32,
     pub remote_addr: SocketAddr,
     pub bind_addr: SocksAddr,
     pub session_type: SessionType,
     pub created_at: Instant,
-    pub last_active: RwLock<Instant>,
-    pub in_use: AtomicBool,
-    pub bytes_sent: AtomicU32,
-    pub bytes_received: AtomicU32,
+    pub last_active: u64,
+    pub in_use: bool,
+    pub bytes_sent: u32,
+    pub bytes_received: u32,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum SessionType {
+    #[default]
     Tcp,
     UdpDatagram,
     UdpStream,
 }
 
 pub struct SessionManager {
-    sessions: RwLock<HashMap<u32, SessionData>>,
+    sessions: RwLock<FxHashMap<u32, SessionData>>,
     id_gen: SessionIdGenerator,
     buffer_pool: BufferPool,
     stats: SessionStats,
@@ -54,13 +56,17 @@ pub struct SessionStats {
 impl SessionManager {
     pub fn new(buffer_pool: BufferPool) -> Self {
         Self {
-            sessions: RwLock::new(HashMap::with_capacity(DEFAULT_SESSION_CAPACITY)),
+            sessions: RwLock::new(FxHashMap::with_capacity_and_hasher(
+                DEFAULT_SESSION_CAPACITY,
+                Default::default(),
+            )),
             id_gen: SessionIdGenerator::new(),
             buffer_pool,
             stats: SessionStats::default(),
         }
     }
 
+    #[inline]
     pub fn create_session(
         &self,
         remote_addr: SocketAddr,
@@ -68,17 +74,19 @@ impl SessionManager {
         session_type: SessionType,
     ) -> u32 {
         let id = self.id_gen.next();
+        let now = Instant::now();
+        let now_u64 = now.elapsed().as_secs();
 
         let session = SessionData {
             id,
             remote_addr,
             bind_addr,
             session_type,
-            created_at: Instant::now(),
-            last_active: RwLock::new(Instant::now()),
-            in_use: AtomicBool::new(true),
-            bytes_sent: AtomicU32::new(0),
-            bytes_received: AtomicU32::new(0),
+            created_at: now,
+            last_active: now_u64,
+            in_use: true,
+            bytes_sent: 0,
+            bytes_received: 0,
         };
 
         self.sessions.write().insert(id, session);
@@ -100,28 +108,17 @@ impl SessionManager {
     }
 
     #[inline]
-    pub fn get_session(&self, id: u32) -> Option<Arc<SessionData>> {
-        self.sessions.read().get(&id).map(|s| {
-            Arc::new(SessionData {
-                id: s.id,
-                remote_addr: s.remote_addr,
-                bind_addr: s.bind_addr.clone(),
-                session_type: s.session_type,
-                created_at: s.created_at,
-                last_active: RwLock::new(*s.last_active.read()),
-                in_use: AtomicBool::new(s.in_use.load(Ordering::Relaxed)),
-                bytes_sent: AtomicU32::new(s.bytes_sent.load(Ordering::Relaxed)),
-                bytes_received: AtomicU32::new(s.bytes_received.load(Ordering::Relaxed)),
-            })
-        })
+    pub fn get_session(&self, id: u32) -> Option<SessionData> {
+        self.sessions.read().get(&id).cloned()
     }
 
     pub fn release_session(&self, id: u32) {
-        if let Some(session) = self.sessions.read().get(&id) {
-            *session.last_active.write() = Instant::now();
-            session.in_use.store(false, Ordering::Release);
-            self.stats.active_sessions.fetch_sub(1, Ordering::Relaxed);
+        let now_u64 = Instant::now().elapsed().as_secs();
+        if let Some(session) = self.sessions.write().get_mut(&id) {
+            session.in_use = false;
+            session.last_active = now_u64;
         }
+        self.stats.active_sessions.fetch_sub(1, Ordering::Relaxed);
     }
 
     pub fn close_session(&self, id: u32) {
@@ -138,28 +135,23 @@ impl SessionManager {
                 }
             }
 
-            let bytes_sent = session.bytes_sent.load(Ordering::Relaxed);
-            let bytes_received = session.bytes_received.load(Ordering::Relaxed);
             self.stats
                 .bytes_sent
-                .fetch_add(bytes_sent, Ordering::Relaxed);
+                .fetch_add(session.bytes_sent, Ordering::Relaxed);
             self.stats
                 .bytes_received
-                .fetch_add(bytes_received, Ordering::Relaxed);
+                .fetch_add(session.bytes_received, Ordering::Relaxed);
         }
     }
 
     pub fn cleanup_expired(&self) {
-        let now = Instant::now();
+        let now = Instant::now().elapsed().as_secs();
         let mut to_remove = Vec::new();
 
         {
             let sessions = self.sessions.read();
             for (id, session) in sessions.iter() {
-                if !session.in_use.load(Ordering::Acquire)
-                    && now.duration_since(*session.last_active.read()).as_secs() as u32
-                        > SESSION_EXPIRE_SECS
-                {
+                if !session.in_use && (now - session.last_active) > SESSION_EXPIRE_SECS as u64 {
                     to_remove.push(*id);
                 }
             }

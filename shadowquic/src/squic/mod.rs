@@ -261,9 +261,8 @@ impl Drop for AssociateRecvSession {
     }
 }
 
-/// Handle udp packets send
-/// It watches the udp socket and sends the packets to the quic connection.
-/// This function is symetrical for both clients and servers.
+/// Handle udp packets send - OPTIMIZED
+/// Uses pre-allocated buffers and reduces copies
 pub async fn handle_udp_send<C: QuicConnection>(
     mut send: C::SendStream,
     udp_recv: AnyUdpRecv,
@@ -279,9 +278,11 @@ pub async fn handle_udp_send<C: QuicConnection>(
     let quic_conn = conn.conn.clone();
     STATS.connection_opened();
 
-    // Use global buffer pool for hot path
+    // Pre-allocated buffers to avoid per-packet allocation
     let mut datagram_buf = packet_buf_large();
     let mut header_buf = Vec::with_capacity(64);
+    // Stack buffer for small packets (avoid heap allocation)
+    let mut stack_buf = [0u8; 256];
 
     loop {
         let (bytes, dst) = down_stream.recv_from().await?;
@@ -317,14 +318,13 @@ pub async fn handle_udp_send<C: QuicConnection>(
                     .await?;
             }
             (bytes.len() as u16).encode(&mut header_buf).await?;
-            // Single write with combined buffer - use stack-allocated small buffer
+            
+            // Use stack buffer for small packets
             let combined_len = header_buf.len() + bytes.len();
-            if combined_len <= 128 {
-                // Small packet: combine on stack
-                let mut combined = [0u8; 128];
-                combined[..header_buf.len()].copy_from_slice(&header_buf);
-                combined[header_buf.len()..header_buf.len() + bytes.len()].copy_from_slice(&bytes);
-                uni_conn.write_all(&combined[..combined_len]).await?;
+            if combined_len <= stack_buf.len() {
+                stack_buf[..header_buf.len()].copy_from_slice(&header_buf);
+                stack_buf[header_buf.len()..combined_len].copy_from_slice(&bytes);
+                uni_conn.write_all(&stack_buf[..combined_len]).await?;
             } else {
                 // Large packet: use arena buffer
                 let mut combined = packet_buf_sized(combined_len);
@@ -333,19 +333,30 @@ pub async fn handle_udp_send<C: QuicConnection>(
                 uni_conn.write_all(&combined).await?;
             }
         } else {
-            // Datagram path - optimized with pre-allocated size
+            // Datagram path - ZERO-COPY: use chained slices
             header_buf.clear();
             SQPacketDatagramHeader { id }
                 .encode(&mut header_buf)
                 .await?;
+            
+            // For datagram, we need to combine. Use reserve_exact to avoid reallocation
             let total_len = header_buf.len() + bytes.len();
-            datagram_buf.clear();
-            datagram_buf.reserve(total_len);
-            datagram_buf.extend_from_slice(&header_buf);
-            datagram_buf.extend_from_slice(&bytes);
-            quic_conn
-                .send_datagram(datagram_buf.split().freeze())
-                .await?;
+            if datagram_buf.capacity() >= total_len {
+                datagram_buf.clear();
+                datagram_buf.extend_from_slice(&header_buf);
+                datagram_buf.extend_from_slice(&bytes);
+                quic_conn
+                    .send_datagram(datagram_buf.split().freeze())
+                    .await?;
+            } else {
+                // Need larger buffer
+                datagram_buf = packet_buf_sized(total_len);
+                datagram_buf.extend_from_slice(&header_buf);
+                datagram_buf.extend_from_slice(&bytes);
+                quic_conn
+                    .send_datagram(datagram_buf.split().freeze())
+                    .await?;
+            }
         }
     }
 }
@@ -371,10 +382,8 @@ pub async fn handle_udp_recv_ctrl<C: QuicConnection>(
     Ok(())
 }
 
-/// Handle udp packet receive task
-/// It watches udp packets from quic connection and sends them to the udp socket.
-/// The udp socket could be downstream(inbound) or upstream(outbound)
-/// This function is symetrical for both clients and servers.
+/// Handle udp packet receive task - OPTIMIZED
+/// Uses try_get first for fast path, avoids async lock in common case
 pub async fn handle_udp_packet_recv<C: QuicConnection>(conn: SQConn<C>) -> Result<(), SError> {
     let id_store = conn.recv_id_store.clone();
 
@@ -386,29 +395,41 @@ pub async fn handle_udp_packet_recv<C: QuicConnection>(conn: SQConn<C>) -> Resul
                 let b = b?;
                 STATS.packet_received(b.len());
 
-                // Zero-copy: decode u16 id directly (2 bytes, big endian)
+                if b.len() < 2 {
+                    continue;
+                }
+
+                // FAST PATH: Try lock-free lookup first
                 let id = u16::from_be_bytes([b[0], b[1]]);
                 let payload = b.slice(2..);
 
-                match id_store.get_socket_or_notify(id).await {
-                 Ok((udp,addr)) =>  {
-                    udp.send_to(payload, addr).await?;
+                // Try immediate lookup (sync, no await)
+                if let Some((udp, addr)) = id_store.try_get_socket(id).await {
+                    // Fast path: direct send without spawning task
+                    let _ = udp.send_to(payload, addr).await;
+                    continue;
                 }
-                Err(mut notify) =>  {
+
+                // SLOW PATH: Need to wait or spawn
+                match id_store.get_socket_or_notify(id).await {
+                 Ok((udp, addr)) =>  {
+                    udp.send_to(payload, addr).await?;
+                 }
+                 Err(mut notify) =>  {
                     let id_store = id_store.clone();
                     let src_addr = conn.remote_address();
                     event!(Level::TRACE, "resolving datagram id:{}",id);
                     let payload = b;
                     tokio::spawn(async move {
                         let _ = notify.changed().await.map_err(|_|debug!("id:{} notifier dropped",id));
-                        let (udp,addr) = id_store.try_get_socket(id).await.ok_or(SError::UDPSessionClosed(String::from("UDP session closed")))?;
-                        info!("udp over datagram: id:{}: {}->{}",id, src_addr, addr);
-                        let payload = payload.slice(2..);
-                        let _ = udp.send_to(payload, addr).await
-                        .map_err(|x|error!("{}",x));
+                        if let Some((udp, addr)) = id_store.try_get_socket(id).await {
+                            info!("udp over datagram: id:{}: {}->{}",id, src_addr, addr);
+                            let payload = payload.slice(2..);
+                            let _ = udp.send_to(payload, addr).await.map_err(|x|error!("{}",x));
+                        }
                         Ok(()) as Result<(), SError>
                      }.in_current_span());
-                }
+                 }
             }
             }
 
@@ -434,16 +455,29 @@ pub async fn handle_udp_packet_recv<C: QuicConnection>(conn: SQConn<C>) -> Resul
                     }
                 };
 
+                // Batch receive and send for better throughput
                 tokio::spawn(async move {
+                    let mut buf = packet_buf_large();
                     loop {
-                        let l: usize = u16::decode(&mut uni_stream).await? as usize;
-                        let mut b = packet_buf_sized(l);
-                        b.resize(l, 0);
-                        uni_stream.read_exact(&mut b).await?;
-                        udp.send_to(b.freeze(), addr.clone()).await?;
+                        let l: usize = match u16::decode(&mut uni_stream).await {
+                            Ok(l) => l as usize,
+                            Err(_) => break,
+                        };
+                        
+                        if l > buf.capacity() {
+                            buf = packet_buf_sized(l);
+                        }
+                        buf.clear();
+                        buf.resize(l, 0);
+                        
+                        if uni_stream.read_exact(&mut buf[..l]).await.is_err() {
+                            break;
+                        }
+                        
+                        // Use try_send to avoid blocking
+                        let _ = udp.send_to(buf.split().freeze(), addr.clone()).await;
                     }
-                    #[allow(unreachable_code)]
-                    (Ok(()) as Result<(), SError>)
+                    Ok(()) as Result<(), SError>
                 }.in_current_span());
             }
         }

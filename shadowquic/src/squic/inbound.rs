@@ -38,6 +38,8 @@ impl<C: QuicConnection> SQServerConn<C> {
             "incoming from {} accepted",
             conn.remote_address()
         );
+        
+        // Spawn single UDP packet handler task
         let conn_clone = self.inner.clone();
         tokio::spawn(async move {
             let _ = handle_udp_packet_recv(conn_clone).in_current_span().await;
@@ -49,34 +51,38 @@ impl<C: QuicConnection> SQServerConn<C> {
                     let (send, recv, id) = bi?;
                     let span = trace_span!("bistream", id = id);
                     trace!("bistream accepted");
-                    tokio::spawn(self.clone().handle_bistream(send, recv, req_send.clone()).instrument(span).in_current_span());
+                    
+                    // Clone only what's needed, not entire self
+                    let users = self.users.clone();
+                    let req_send = req_send.clone();
+                    let inner = self.inner.clone();
+                    
+                    tokio::spawn(
+                        Self::handle_bistream_optimized(users, inner, send, recv, req_send)
+                            .instrument(span)
+                    );
                 },
             }
         }
         Ok(())
     }
-    async fn handle_bistream(
-        self,
+
+    // Optimized bistream handler - avoids self clone
+    async fn handle_bistream_optimized(
+        users: SunnyQuicUsers,
+        inner: SQConn<C>,
         send: C::SendStream,
         mut recv: C::RecvStream,
         req_send: Sender<ProxyRequest>,
     ) -> Result<(), SError> {
         let req = SQReq::decode(&mut recv).await?;
 
-        // let rate: f32 = (self.0.conn.stats().path.lost_packets as f32)
-        //     / ((self.0.conn.stats().path.sent_packets + 1) as f32);
-        // info!(
-        //     "packet_loss_rate:{:.2}%, rtt:{:?}, mtu:{}",
-        //     rate * 100.0,
-        //     self.0.conn.rtt(),
-        //     self.0.conn.stats().path.current_mtu,
-        // );
         match req {
             SQReq::SQConnect(dst) => {
-                wait_sunny_auth(&self.inner).await?;
+                wait_sunny_auth(&inner).await?;
                 info!(
                     "connect request: {}->{} accepted",
-                    self.inner.remote_address(),
+                    inner.remote_address(),
                     dst
                 );
                 let tcp: TcpSession = TcpSession {
@@ -90,10 +96,12 @@ impl<C: QuicConnection> SQServerConn<C> {
             }
             ref req @ (SQReq::SQAssociatOverDatagram(ref dst)
             | SQReq::SQAssociatOverStream(ref dst)) => {
-                wait_sunny_auth(&self.inner).await?;
+                wait_sunny_auth(&inner).await?;
                 info!("association request to {} accepted", dst);
-                let (local_send, udp_recv) = channel::<(Bytes, SocksAddr)>(256);
-                let (udp_send, local_recv) = channel::<(Bytes, SocksAddr)>(256);
+                
+                // Use larger channel buffer for better throughput
+                let (local_send, udp_recv) = channel::<(Bytes, SocksAddr)>(512);
+                let (udp_send, local_recv) = channel::<(Bytes, SocksAddr)>(512);
                 let udp: UdpSession = UdpSession {
                     send: Arc::new(udp_send),
                     recv: Box::new(udp_recv),
@@ -102,27 +110,28 @@ impl<C: QuicConnection> SQServerConn<C> {
                 };
                 let local_send = Arc::new(local_send);
                 let over_stream = matches!(req, SQReq::SQAssociatOverStream(_));
-                req_send
+                
+                if req_send
                     .send(ProxyRequest::Udp(udp))
                     .await
-                    .map_err(|_| SError::OutboundUnavailable)?;
-                let fut1 =
-                    handle_udp_send(send, Box::new(local_recv), self.inner.clone(), over_stream);
-                let fut2 = handle_udp_recv_ctrl(recv, local_send, self.inner);
+                    .is_err() {
+                    return Err(SError::OutboundUnavailable)?;
+                }
+                
+                let fut1 = handle_udp_send(send, Box::new(local_recv), inner.clone(), over_stream);
+                let fut2 = handle_udp_recv_ctrl(recv, local_send, inner);
                 tokio::try_join!(fut1, fut2)?;
             }
             SQReq::SQAuthenticate(passwd_hash) => {
-                if let Some(name) = self.users.get(passwd_hash.as_ref()) {
+                if let Some(name) = users.get(passwd_hash.as_ref()) {
                     tracing::info!("user authenticated:{}", name);
-                    self.inner
+                    inner
                         .authed
                         .set(true)
                         .expect("repeated authentication!");
                 } else {
                     tracing::error!("authentication failed");
-                    // 263 is tested result by connecting with sunnyquic client to
-                    // cloudflare.com:443
-                    self.inner.close(263, &[]);
+                    inner.close(263, &[]);
                     return Err(SError::SunnyAuthError("Wrong password/username".into()));
                 }
             }
