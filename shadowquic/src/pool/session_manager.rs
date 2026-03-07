@@ -157,7 +157,7 @@ impl SessionManager {
             let sessions = self.sessions.read();
             for (id, session) in sessions.iter() {
                 if !session.in_use.load(Ordering::Acquire)
-                    && now.duration_since(*session.last_active.read()).as_secs()
+                    && now.duration_since(*session.last_active.read()).as_secs() as u32
                         > SESSION_EXPIRE_SECS
                 {
                     to_remove.push(*id);
