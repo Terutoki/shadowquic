@@ -318,7 +318,7 @@ pub async fn handle_udp_send<C: QuicConnection>(
                     .await?;
             }
             (bytes.len() as u16).encode(&mut header_buf).await?;
-            
+
             // Use stack buffer for small packets
             let combined_len = header_buf.len() + bytes.len();
             if combined_len <= stack_buf.len() {
@@ -338,7 +338,7 @@ pub async fn handle_udp_send<C: QuicConnection>(
             SQPacketDatagramHeader { id }
                 .encode(&mut header_buf)
                 .await?;
-            
+
             // For datagram, we need to combine. Use reserve_exact to avoid reallocation
             let total_len = header_buf.len() + bytes.len();
             if datagram_buf.capacity() >= total_len {
@@ -463,17 +463,17 @@ pub async fn handle_udp_packet_recv<C: QuicConnection>(conn: SQConn<C>) -> Resul
                             Ok(l) => l as usize,
                             Err(_) => break,
                         };
-                        
+
                         if l > buf.capacity() {
                             buf = packet_buf_sized(l);
                         }
                         buf.clear();
                         buf.resize(l, 0);
-                        
+
                         if uni_stream.read_exact(&mut buf[..l]).await.is_err() {
                             break;
                         }
-                        
+
                         // Use try_send to avoid blocking
                         let _ = udp.send_to(buf.split().freeze(), addr.clone()).await;
                     }

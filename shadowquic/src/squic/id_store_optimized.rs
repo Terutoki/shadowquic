@@ -1,7 +1,6 @@
-use std::sync::atomic::{AtomicU64, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicUsize, AtomicU32, Ordering};
 use std::sync::Arc;
 
-use bytes::Bytes;
 use crossbeam::utils::CachePadded;
 use tokio::sync::watch;
 
@@ -18,8 +17,8 @@ pub struct UdpIdStore {
 }
 
 struct UdpIdShard {
-    slots: Box<[CachePadded<IdSlot>>>,
-    version: CachePadded<AtomicU64>,
+    slots: Box<[CachePadded<IdSlot>]>,
+    version: CachePadded<AtomicUsize>,
 }
 
 struct IdSlot {
@@ -47,7 +46,6 @@ impl IdSlot {
 const SLOT_EMPTY: u32 = 0;
 const SLOT_PENDING: u32 = 1;
 const SLOT_READY: u32 = 2;
-const SLOT_CLOSING: u32 = 3;
 
 impl UdpIdStore {
     pub fn new() -> Self {
@@ -59,7 +57,7 @@ impl UdpIdStore {
             }
             shards.push(Arc::new(UdpIdShard {
                 slots: slots.into_boxed_slice(),
-                version: CachePadded::new(AtomicU64::new(0)),
+                version: CachePadded::new(AtomicUsize::new(0)),
             }));
         }
         Self { shards }

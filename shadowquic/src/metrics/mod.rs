@@ -1,13 +1,13 @@
 use std::sync::Arc;
 use std::sync::LazyLock;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[derive(Clone, Default)]
 pub struct Metrics {
-    pub packets_received: Arc<AtomicU64>,
-    pub packets_sent: Arc<AtomicU64>,
-    pub bytes_received: Arc<AtomicU64>,
-    pub bytes_sent: Arc<AtomicU64>,
+    pub packets_received: Arc<AtomicUsize>,
+    pub packets_sent: Arc<AtomicUsize>,
+    pub bytes_received: Arc<AtomicUsize>,
+    pub bytes_sent: Arc<AtomicUsize>,
     pub connections_active: Arc<AtomicUsize>,
     pub connections_total: Arc<AtomicUsize>,
     pub errors: Arc<AtomicUsize>,
@@ -19,14 +19,13 @@ impl Metrics {
     #[inline(always)]
     pub fn record_packet_received(&self, size: usize) {
         self.packets_received.fetch_add(1, Ordering::Relaxed);
-        self.bytes_received
-            .fetch_add(size as u64, Ordering::Relaxed);
+        self.bytes_received.fetch_add(size, Ordering::Relaxed);
     }
 
     #[inline(always)]
     pub fn record_packet_sent(&self, size: usize) {
         self.packets_sent.fetch_add(1, Ordering::Relaxed);
-        self.bytes_sent.fetch_add(size as u64, Ordering::Relaxed);
+        self.bytes_sent.fetch_add(size, Ordering::Relaxed);
     }
 
     #[inline(always)]
@@ -72,10 +71,10 @@ impl Metrics {
 
 #[derive(Debug, Clone, Default)]
 pub struct MetricsSnapshot {
-    pub packets_received: u64,
-    pub packets_sent: u64,
-    pub bytes_received: u64,
-    pub bytes_sent: u64,
+    pub packets_received: usize,
+    pub packets_sent: usize,
+    pub bytes_received: usize,
+    pub bytes_sent: usize,
     pub connections_active: usize,
     pub connections_total: usize,
     pub errors: usize,
@@ -95,6 +94,6 @@ macro_rules! metric_increment {
 #[macro_export]
 macro_rules! metric_add {
     ($name:ident, $value:expr) => {
-        $name.fetch_add($value as u64, std::sync::atomic::Ordering::Relaxed);
+        $name.fetch_add($value, std::sync::atomic::Ordering::Relaxed);
     };
 }
