@@ -6,6 +6,9 @@ use std::sync::LazyLock;
 
 pub mod optimized;
 
+use optimized::free_udp_id_optimized;
+use optimized::next_udp_id_optimized;
+
 const INITIAL_CAPACITY: usize = 4096;
 
 pub trait IdGenerator: sealed::Sealed {
@@ -95,16 +98,14 @@ impl Default for ShardedIdGenerator {
     }
 }
 
-static UDP_ID_GENERATOR: LazyLock<AtomicIdGenerator> = LazyLock::new(AtomicIdGenerator::new);
-
 #[inline(always)]
 pub fn next_udp_id() -> u32 {
-    UDP_ID_GENERATOR.next()
+    next_udp_id_optimized()
 }
 
 #[inline(always)]
 pub fn free_udp_id(id: u32) {
-    UDP_ID_GENERATOR.free(id)
+    free_udp_id_optimized(id)
 }
 
 use parking_lot::RwLock;
