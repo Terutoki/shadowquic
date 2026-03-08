@@ -163,18 +163,11 @@ impl PerCoreWorker {
 
 #[cfg(target_os = "linux")]
 fn set_cpu_affinity_impl(cpu_id: usize) {
-    use std::os::unix::thread::JoinHandleExt;
-
-    if let Ok(tid) = thread::current().tid() {
-        unsafe {
-            let mut cpuset: libc::cpu_set_t = std::mem::zeroed();
-            libc::CPU_SET(cpu_id, &mut cpuset);
-            libc::sched_setaffinity(
-                tid as libc::pid_t,
-                std::mem::size_of::<libc::cpu_set_t>(),
-                &cpuset,
-            );
-        }
+    unsafe {
+        let tid = libc::syscall(libc::SYS_gettid) as libc::pid_t;
+        let mut cpuset: libc::cpu_set_t = std::mem::zeroed();
+        libc::CPU_SET(cpu_id, &mut cpuset);
+        libc::sched_setaffinity(tid, std::mem::size_of::<libc::cpu_set_t>(), &cpuset);
     }
 }
 
