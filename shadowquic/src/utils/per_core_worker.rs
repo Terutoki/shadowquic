@@ -2,14 +2,10 @@ use crate::error::SError;
 use crate::pool::optimized_session::OptimizedSessionManager;
 use crate::utils::udp_batch::PacketQueue;
 use bytes::Bytes;
-use std::future::Future;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
-
-#[cfg(target_os = "linux")]
-use std::os::linux::thread::JoinHandleExt;
 
 pub struct WorkerConfig {
     pub cpu_affinity: Option<Vec<usize>>,
@@ -35,7 +31,6 @@ fn num_cpus() -> usize {
         .unwrap_or(4)
 }
 
-#[repr(align(64))]
 pub struct WorkerLocal {
     id: usize,
     cpu_id: usize,
@@ -144,17 +139,8 @@ impl PerCoreWorker {
             .name(format!("worker-{}", self.worker.id))
             .spawn(move || {
                 #[cfg(target_os = "linux")]
-                if let Ok(tid) = thread::current().tid() {
-                    unsafe {
-                        let mut cpuset: libc::cpu_set_t = std::mem::zeroed();
-                        let cpu_id = worker.cpu_id();
-                        libc::CPU_SET(cpu_id, &mut cpuset);
-                        libc::sched_setaffinity(
-                            tid as libc::pid_t,
-                            std::mem::size_of::<libc::cpu_set_t>(),
-                            &cpuset,
-                        );
-                    }
+                {
+                    set_cpu_affinity_impl(worker.cpu_id());
                 }
 
                 handler(worker);
@@ -174,6 +160,26 @@ impl PerCoreWorker {
         self.worker.stop();
     }
 }
+
+#[cfg(target_os = "linux")]
+fn set_cpu_affinity_impl(cpu_id: usize) {
+    use std::os::unix::thread::JoinHandleExt;
+
+    if let Ok(tid) = thread::current().tid() {
+        unsafe {
+            let mut cpuset: libc::cpu_set_t = std::mem::zeroed();
+            libc::CPU_SET(cpu_id, &mut cpuset);
+            libc::sched_setaffinity(
+                tid as libc::pid_t,
+                std::mem::size_of::<libc::cpu_set_t>(),
+                &cpuset,
+            );
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn set_cpu_affinity_impl(_cpu_id: usize) {}
 
 pub struct WorkerPool {
     workers: Vec<PerCoreWorker>,
@@ -281,9 +287,9 @@ impl PartialEq for FlowKey {
 impl Eq for FlowKey {}
 
 impl Hash for FlowKey {
-    fn hash<H: Hasher>(&self, H: &mut H) {
-        self.src.hash(H);
-        self.dst.hash(H);
+    fn hash<H: Hasher>(&self, h: &mut H) {
+        self.src.hash(h);
+        self.dst.hash(h);
     }
 }
 

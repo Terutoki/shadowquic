@@ -2923,6 +2923,7 @@ dependencies = [
  "iroh-quinn",
  "jemallocator",
  "lazy_static",
+ "libc",
  "notify",
  "parking_lot",
  "qbase",

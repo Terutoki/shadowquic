@@ -5,13 +5,9 @@ use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
-#[cfg(any(target_os = "linux", target_os = "android"))]
-use std::os::unix::io::{AsRawFd, RawFd};
-
-const BATCH_SIZE: usize = 64;
-
 pub struct UdpBatchSocket {
     socket: Socket,
+    #[allow(dead_code)]
     addr: SocketAddr,
 }
 
@@ -35,17 +31,13 @@ impl UdpBatchSocket {
     pub fn local_addr(&self) -> Result<SocketAddr, SError> {
         self.socket.local_addr().map(|a| a.as_socket().unwrap()).map_err(|e| SError::Io(e))
     }
-
-    #[cfg(any(target_os = "linux", target_os = "android"))]
-    pub fn as_raw_fd(&self) -> RawFd {
-        self.socket.as_raw_fd()
-    }
 }
 
 use tokio::net::UdpSocket;
 
 pub struct OptimizedUdpSession {
     socket: UdpSocket,
+    #[allow(dead_code)]
     peer_addr: SocketAddr,
 }
 
@@ -93,6 +85,7 @@ use crossbeam::queue::SegQueue;
 
 pub struct PacketQueue {
     queue: SegQueue<(Bytes, SocketAddr, SocketAddr)>,
+    #[allow(dead_code)]
     stats: QueueStats,
 }
 
@@ -145,21 +138,21 @@ impl SocketOptimizer {
         
         unsafe {
             let enable: libc::c_int = 1;
-            libc::setsockopt(
+            let _ = libc::setsockopt(
                 fd,
                 libc::IPPROTO_UDP,
                 libc::UDP_GRO,
                 &enable as *const _ as *const libc::c_void,
                 std::mem::size_of::<libc::c_int>() as libc::socklen_t,
-            )?;
+            );
             
-            libc::setsockopt(
+            let _ = libc::setsockopt(
                 fd,
                 libc::SOL_SOCKET,
                 libc::SO_BUSY_POLL,
                 &enable as *const _ as *const libc::c_void,
                 std::mem::size_of::<libc::c_int>() as libc::socklen_t,
-            )?;
+            );
         }
         
         socket.set_nonblocking(true)?;
@@ -184,21 +177,21 @@ impl SocketOptimizer {
             
             unsafe {
                 let enable: libc::c_int = 1;
-                libc::setsockopt(
+                let _ = libc::setsockopt(
                     fd,
                     libc::IPPROTO_TCP,
                     libc::TCP_QUICKACK,
                     &enable as *const _ as *const libc::c_void,
                     std::mem::size_of::<libc::c_int>() as libc::socklen_t,
-                )?;
+                );
                 
-                libc::setsockopt(
+                let _ = libc::setsockopt(
                     fd,
                     libc::IPPROTO_TCP,
                     libc::TCP_CORK,
                     &enable as *const _ as *const libc::c_void,
                     std::mem::size_of::<libc::c_int>() as libc::socklen_t,
-                )?;
+                );
             }
         }
         
