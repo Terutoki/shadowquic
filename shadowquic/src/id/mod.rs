@@ -1,8 +1,8 @@
 use crossbeam::queue::SegQueue;
 use slab::Slab;
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::sync::LazyLock;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 pub mod optimized;
 

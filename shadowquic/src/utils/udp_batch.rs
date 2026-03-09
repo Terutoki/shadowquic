@@ -2,8 +2,8 @@ use crate::error::SError;
 use bytes::Bytes;
 use socket2::{Domain, Protocol, Socket, Type};
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 pub struct UdpBatchSocket {
     socket: Socket,
@@ -13,23 +13,30 @@ pub struct UdpBatchSocket {
 
 impl UdpBatchSocket {
     pub fn new(addr: SocketAddr) -> Result<Self, SError> {
-        let domain = if addr.is_ipv6() { Domain::IPV6 } else { Domain::IPV4 };
-        
+        let domain = if addr.is_ipv6() {
+            Domain::IPV6
+        } else {
+            Domain::IPV4
+        };
+
         let socket = Socket::new(domain, Type::DGRAM, Some(Protocol::UDP))?;
-        
+
         socket.set_reuse_address(true)?;
         socket.set_nonblocking(true)?;
-        
+
         #[cfg(any(target_os = "linux", target_os = "android"))]
         socket.set_reuse_port(true)?;
-        
+
         socket.bind(&addr.into())?;
-        
+
         Ok(Self { socket, addr })
     }
 
     pub fn local_addr(&self) -> Result<SocketAddr, SError> {
-        self.socket.local_addr().map(|a| a.as_socket().unwrap()).map_err(|e| SError::Io(e))
+        self.socket
+            .local_addr()
+            .map(|a| a.as_socket().unwrap())
+            .map_err(|e| SError::Io(e))
     }
 }
 
@@ -133,9 +140,9 @@ impl SocketOptimizer {
     #[cfg(target_os = "linux")]
     pub fn set_udp_optimizations(socket: &Socket) -> Result<(), SError> {
         use std::os::fd::AsRawFd;
-        
+
         let fd = socket.as_raw_fd();
-        
+
         unsafe {
             let enable: libc::c_int = 1;
             let _ = libc::setsockopt(
@@ -145,7 +152,7 @@ impl SocketOptimizer {
                 &enable as *const _ as *const libc::c_void,
                 std::mem::size_of::<libc::c_int>() as libc::socklen_t,
             );
-            
+
             let _ = libc::setsockopt(
                 fd,
                 libc::SOL_SOCKET,
@@ -154,9 +161,9 @@ impl SocketOptimizer {
                 std::mem::size_of::<libc::c_int>() as libc::socklen_t,
             );
         }
-        
+
         socket.set_nonblocking(true)?;
-        
+
         Ok(())
     }
 
@@ -168,13 +175,13 @@ impl SocketOptimizer {
 
     pub fn set_tcp_optimizations(socket: &Socket) -> Result<(), SError> {
         socket.set_tcp_nodelay(true)?;
-        
+
         #[cfg(target_os = "linux")]
         {
             use std::os::fd::AsRawFd;
-            
+
             let fd = socket.as_raw_fd();
-            
+
             unsafe {
                 let enable: libc::c_int = 1;
                 let _ = libc::setsockopt(
@@ -184,7 +191,7 @@ impl SocketOptimizer {
                     &enable as *const _ as *const libc::c_void,
                     std::mem::size_of::<libc::c_int>() as libc::socklen_t,
                 );
-                
+
                 let _ = libc::setsockopt(
                     fd,
                     libc::IPPROTO_TCP,
@@ -194,7 +201,7 @@ impl SocketOptimizer {
                 );
             }
         }
-        
+
         Ok(())
     }
 }

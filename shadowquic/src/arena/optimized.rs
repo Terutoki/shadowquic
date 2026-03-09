@@ -1,8 +1,8 @@
 use bytes::BytesMut;
 use crossbeam::queue::SegQueue;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::sync::LazyLock;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 const DEFAULT_BUFFER_SIZE: usize = 2048;
 const LARGE_BUFFER_SIZE: usize = 65535;
