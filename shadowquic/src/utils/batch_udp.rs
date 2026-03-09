@@ -222,24 +222,16 @@ mod linux_impl {
     }
 
     fn addr_to_sockaddr(addr: &SocketAddr) -> libc::sockaddr_in {
-        let ip = match addr.ip() {
-            std::net::Ipv4Addr(ip) => ip.octets(),
-            std::net::Ipv6Addr(ip) => {
-                let segs = ip.segments();
-                [
-                    (segs[0] >> 8) as u8 | (segs[0] as u8) << 8,
-                    segs[0] as u8,
-                    (segs[1] >> 8) as u8 | (segs[1] as u8) << 8,
-                    segs[1] as u8,
-                ]
-            }
+        let ip_bytes: [u8; 4] = match addr.ip() {
+            std::net::IpAddr::V4(ip) => ip.octets(),
+            std::net::IpAddr::V6(_ip) => [0, 0, 0, 0],
         };
 
         libc::sockaddr_in {
             sin_family: libc::AF_INET as libc::sa_family_t,
             sin_port: addr.port().to_be(),
             sin_addr: libc::in_addr {
-                s_addr: u32::from_be_bytes(ip),
+                s_addr: u32::from_be_bytes(ip_bytes),
             },
             sin_zero: [0; 8],
         }
