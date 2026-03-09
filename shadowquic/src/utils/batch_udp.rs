@@ -239,14 +239,14 @@ mod linux_impl {
             sin_family: libc::AF_INET as libc::sa_family_t,
             sin_port: addr.port().to_be(),
             sin_addr: libc::in_addr {
-                s_addr: u32::from_ne_bytes(ip),
+                s_addr: u32::from_be_bytes(ip),
             },
             sin_zero: [0; 8],
         }
     }
 
     fn sockaddr_to_addr(sa: &libc::sockaddr_in) -> SocketAddr {
-        let ip = std::net::Ipv4Addr::from(u32::from_ne_bytes(sa.sin_addr.s_addr));
+        let ip = std::net::Ipv4Addr::from(sa.sin_addr.s_addr);
         let port = u16::from_be(sa.sin_port);
         SocketAddr::new(std::net::IpAddr::V4(ip), port)
     }
@@ -386,7 +386,6 @@ impl RecvMmsgBuffer {
 
         for i in 0..capacity {
             addrs[i].sin_family = libc::AF_INET as libc::sa_family_t;
-            addrs[i].sin_len = std::mem::size_of::<libc::sockaddr_in>() as libc::sa_family_t;
 
             iovecs[i].iov_base = buffers[i].as_ptr() as *mut libc::c_void;
             iovecs[i].iov_len = 65535;
@@ -442,7 +441,6 @@ impl SendMmsgBuffer {
 
         for i in 0..capacity {
             addrs[i].sin_family = libc::AF_INET as libc::sa_family_t;
-            addrs[i].sin_len = std::mem::size_of::<libc::sockaddr_in>() as libc::sa_family_t;
 
             mmsghdrs[i].msg_hdr.msg_name = &mut addrs[i] as *mut _ as *mut libc::c_void;
             mmsghdrs[i].msg_hdr.msg_namelen =
