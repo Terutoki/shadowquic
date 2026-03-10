@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+#![allow(unsafe_op_in_unsafe_fn)]
 
 use bytes::Bytes;
 use std::net::SocketAddr;

@@ -235,14 +235,7 @@ impl HugePageAllocator {
 pub static HUGE_PAGE_ALLOCATOR: LazyLock<HugePageAllocator> = LazyLock::new(|| {
     #[cfg(target_os = "linux")]
     {
-        let page_size = unsafe {
-            let size = libc::sysconf(libc::_SC_HUGEPAGE);
-            if size > 0 {
-                size as usize
-            } else {
-                2 * 1024 * 1024
-            }
-        };
+        let page_size: usize = 2 * 1024 * 1024; // Default 2MB
         HugePageAllocator::new(page_size)
     }
     #[cfg(not(target_os = "linux"))]
