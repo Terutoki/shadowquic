@@ -176,3 +176,117 @@ impl Default for UdpIdStore {
         Self::new()
     }
 }
+
+use std::ptr::NonNull;
+use std::alloc::Layout;
+
+pub struct LockFreeIdTable {
+    table: NonNull<IdEntry>,
+    capacity: usize,
+    len: AtomicUsize,
+}
+
+struct IdEntry {
+    id: u16,
+    state: AtomicU32,
+    udp: Option<AnyUdpSend>,
+    addr: Option<SocksAddr>,
+    next: AtomicUsize,
+}
+
+impl LockFreeIdTable {
+    pub fn new(capacity: usize) -> Self {
+        let layout = Layout::array::<IdEntry>(capacity).unwrap();
+        let table = unsafe { std::alloc::alloc_zeroed(layout) as *mut IdEntry };
+        
+        for i in 0..capacity {
+            unsafe {
+                std::ptr::write(table.add(i), IdEntry {
+                    id: 0,
+                    state: AtomicU32::new(0),
+                    udp: None,
+                    addr: None,
+                    next: AtomicUsize::new(i + 1),
+                });
+            }
+        }
+        
+        unsafe {
+            std::ptr::write(table.add(capacity - 1), IdEntry {
+                id: 0,
+                state: AtomicU32::new(0),
+                udp: None,
+                addr: None,
+                next: AtomicUsize::new(0),
+            });
+        }
+
+        Self {
+            table: NonNull::new(table).unwrap(),
+            capacity,
+            len: AtomicUsize::new(0),
+        }
+    }
+
+    #[inline]
+    pub fn try_get(&self, id: u16) -> Option<(AnyUdpSend, SocksAddr)> {
+        unsafe {
+            let ptr = self.table.as_ptr().add((id as usize) % self.capacity);
+            if (*ptr).state.load(Ordering::Acquire) == SLOT_READY {
+                let udp = (*ptr).udp.clone()?;
+                let addr = (*ptr).addr.clone()?;
+                Some((udp, addr))
+            } else {
+                None
+            }
+        }
+    }
+
+    #[inline]
+    pub fn insert(&self, id: u16, udp: AnyUdpSend, addr: SocksAddr) -> bool {
+        unsafe {
+            let ptr = self.table.as_ptr().add((id as usize) % self.capacity);
+            let expected = SLOT_EMPTY;
+            if (*ptr).state.compare_exchange(expected, SLOT_PENDING, Ordering::AcqRel, Ordering::Relaxed).is_ok() {
+                (*ptr).udp = Some(udp);
+                (*ptr).addr = Some(addr);
+                (*ptr).id = id;
+                (*ptr).state.store(SLOT_READY, Ordering::Release);
+                self.len.fetch_add(1, Ordering::Relaxed);
+                true
+            } else {
+                false
+            }
+        }
+    }
+
+    #[inline]
+    pub fn remove(&self, id: u16) -> bool {
+        unsafe {
+            let ptr = self.table.as_ptr().add((id as usize) % self.capacity);
+            if (*ptr).id == id && (*ptr).state.load(Ordering::Acquire) == SLOT_READY {
+                (*ptr).state.store(SLOT_EMPTY, Ordering::Release);
+                (*ptr).udp = None;
+                (*ptr).addr = None;
+                self.len.fetch_sub(1, Ordering::Relaxed);
+                true
+            } else {
+                false
+            }
+        }
+    }
+
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.len.load(Ordering::Relaxed)
+    }
+}
+
+impl Drop for LockFreeIdTable {
+    fn drop(&mut self) {
+        unsafe {
+            let layout = Layout::array::<IdEntry>(self.capacity).unwrap();
+            std::alloc::dealloc(self.table.as_ptr() as *mut u8, layout);
+        }
+    }
+}

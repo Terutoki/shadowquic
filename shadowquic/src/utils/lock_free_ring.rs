@@ -1,11 +1,29 @@
 use bytes::Bytes;
 use std::cell::UnsafeCell;
 use std::net::SocketAddr;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 pub const RING_SIZE: usize = 4096;
 pub const RING_MASK: usize = RING_SIZE - 1;
+
+#[inline]
+#[cfg(target_arch = "x86_64")]
+unsafe fn cpu_relax() {
+    std::arch::x86_64::_mm_pause();
+}
+
+#[inline]
+#[cfg(target_arch = "aarch64")]
+unsafe fn cpu_relax() {
+    std::hint::spin_loop()
+}
+
+#[inline]
+#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+unsafe fn cpu_relax() {
+    std::hint::spin_loop()
+}
 
 pub struct LockFreeRingBuffer {
     buffer: UnsafeCell<Vec<RingEntry>>,
@@ -40,8 +58,8 @@ impl LockFreeRingBuffer {
         for _ in 0..capacity {
             buffer.push(RingEntry {
                 data: Bytes::new(),
-                src_addr: "0.0.0.0:0".parse().unwrap(),
-                dst_addr: "0.0.0.0:0".parse().unwrap(),
+                src_addr: SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), 0),
+                dst_addr: SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), 0),
             });
         }
 
@@ -65,9 +83,8 @@ impl LockFreeRingBuffer {
         }
 
         unsafe {
-            unsafe {
-                (&mut *self.buffer.get())[tail & RING_MASK] = entry;
-            }
+            let buffer_ptr = self.buffer.get() as *mut RingEntry;
+            std::ptr::write(buffer_ptr.add(tail & RING_MASK), entry);
         }
         self.tail.store(tail.wrapping_add(1), Ordering::Release);
 
@@ -85,7 +102,10 @@ impl LockFreeRingBuffer {
             return None;
         }
 
-        let entry = unsafe { (&mut *self.buffer.get())[head & RING_MASK].clone() };
+        let entry = unsafe {
+            let buffer_ptr = self.buffer.get() as *mut RingEntry;
+            std::ptr::read(buffer_ptr.add(head & RING_MASK))
+        };
         self.head.store(head.wrapping_add(1), Ordering::Release);
 
         self.stats.popped.fetch_add(1, Ordering::Relaxed);
@@ -135,7 +155,7 @@ impl LockFreeRingBuffer {
 }
 
 pub struct MpscRingBuffer {
-    buffer: UnsafeCell<Vec<Option<RingEntry>>>,
+    buffer: UnsafeCell<*mut Option<RingEntry>>,
     head: AtomicUsize,
     tail: AtomicUsize,
     capacity: usize,
@@ -147,13 +167,11 @@ unsafe impl Sync for MpscRingBuffer {}
 impl MpscRingBuffer {
     pub fn new(capacity: usize) -> Self {
         let capacity = capacity.next_power_of_two();
-        let mut buffer = Vec::with_capacity(capacity);
-        for _ in 0..capacity {
-            buffer.push(None);
-        }
+        let layout = std::alloc::Layout::array::<Option<RingEntry>>(capacity).unwrap();
+        let ptr = unsafe { std::alloc::alloc_zeroed(layout) as *mut Option<RingEntry> };
 
         Self {
-            buffer: UnsafeCell::new(buffer),
+            buffer: UnsafeCell::new(ptr),
             head: AtomicUsize::new(0),
             tail: AtomicUsize::new(0),
             capacity,
@@ -177,7 +195,8 @@ impl MpscRingBuffer {
             {
                 Ok(_) => {
                     unsafe {
-                        (&mut *self.buffer.get())[tail & RING_MASK] = Some(entry);
+                        let buf_ptr = self.buffer.get() as *mut Option<RingEntry>;
+                        std::ptr::write(buf_ptr.add(tail & RING_MASK), Some(entry));
                     }
                     return true;
                 }
@@ -195,7 +214,10 @@ impl MpscRingBuffer {
             return None;
         }
 
-        let entry = unsafe { (&mut *self.buffer.get())[head & RING_MASK].take() };
+        let entry = unsafe {
+            let buf_ptr = self.buffer.get() as *mut Option<RingEntry>;
+            std::ptr::read(buf_ptr.add(head & RING_MASK)).take()
+        };
         self.head.store(head.wrapping_add(1), Ordering::Release);
         entry
     }
@@ -218,8 +240,17 @@ impl MpscRingBuffer {
     }
 }
 
+impl Drop for MpscRingBuffer {
+    fn drop(&mut self) {
+        let layout = std::alloc::Layout::array::<Option<RingEntry>>(self.capacity).unwrap();
+        unsafe {
+            std::alloc::dealloc(self.buffer.get() as *mut u8, layout);
+        }
+    }
+}
+
 pub struct SpscRingBuffer {
-    buffer: UnsafeCell<Vec<Option<RingEntry>>>,
+    buffer: UnsafeCell<*mut Option<RingEntry>>,
     read_idx: AtomicUsize,
     write_idx: AtomicUsize,
     capacity: usize,
@@ -231,13 +262,11 @@ unsafe impl Sync for SpscRingBuffer {}
 impl SpscRingBuffer {
     pub fn new(capacity: usize) -> Self {
         let capacity = capacity.next_power_of_two();
-        let mut buffer = Vec::with_capacity(capacity);
-        for _ in 0..capacity {
-            buffer.push(None);
-        }
+        let layout = std::alloc::Layout::array::<Option<RingEntry>>(capacity).unwrap();
+        let ptr = unsafe { std::alloc::alloc_zeroed(layout) as *mut Option<RingEntry> };
 
         Self {
-            buffer: UnsafeCell::new(buffer),
+            buffer: UnsafeCell::new(ptr),
             read_idx: AtomicUsize::new(0),
             write_idx: AtomicUsize::new(0),
             capacity,
@@ -254,7 +283,8 @@ impl SpscRingBuffer {
         }
 
         unsafe {
-            (&mut *self.buffer.get())[write & RING_MASK] = Some(entry);
+            let buf_ptr = self.buffer.get() as *mut Option<RingEntry>;
+            std::ptr::write(buf_ptr.add(write & RING_MASK), Some(entry));
         }
         self.write_idx
             .store(write.wrapping_add(1), Ordering::Release);
@@ -270,7 +300,10 @@ impl SpscRingBuffer {
             return None;
         }
 
-        let entry = unsafe { (&mut *self.buffer.get())[read & RING_MASK].take() };
+        let entry = unsafe {
+            let buf_ptr = self.buffer.get() as *mut Option<RingEntry>;
+            std::ptr::read(buf_ptr.add(read & RING_MASK)).take()
+        };
         self.read_idx.store(read.wrapping_add(1), Ordering::Release);
         entry
     }
@@ -290,6 +323,15 @@ impl SpscRingBuffer {
     #[inline]
     pub fn capacity(&self) -> usize {
         self.capacity
+    }
+}
+
+impl Drop for SpscRingBuffer {
+    fn drop(&mut self) {
+        let layout = std::alloc::Layout::array::<Option<RingEntry>>(self.capacity).unwrap();
+        unsafe {
+            std::alloc::dealloc(self.buffer.get() as *mut u8, layout);
+        }
     }
 }
 

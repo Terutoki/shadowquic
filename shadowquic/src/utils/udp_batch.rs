@@ -9,10 +9,16 @@ pub struct UdpBatchSocket {
     socket: Socket,
     #[allow(dead_code)]
     addr: SocketAddr,
+    recv_buf_size: usize,
+    send_buf_size: usize,
 }
 
 impl UdpBatchSocket {
     pub fn new(addr: SocketAddr) -> Result<Self, SError> {
+        Self::with_buffer_size(addr, 0, 0)
+    }
+
+    pub fn with_buffer_size(addr: SocketAddr, recv_buf_size: usize, send_buf_size: usize) -> Result<Self, SError> {
         let domain = if addr.is_ipv6() {
             Domain::IPV6
         } else {
@@ -29,7 +35,62 @@ impl UdpBatchSocket {
 
         socket.bind(&addr.into())?;
 
-        Ok(Self { socket, addr })
+        if recv_buf_size > 0 {
+            socket.set_recv_buffer_size(recv_buf_size)?;
+        }
+        
+        if send_buf_size > 0 {
+            socket.set_send_buffer_size(send_buf_size)?;
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            Self::apply_linux_optimizations(&socket)?;
+        }
+
+        Ok(Self { 
+            socket, 
+            addr,
+            recv_buf_size,
+            send_buf_size,
+        })
+    }
+
+    #[cfg(target_os = "linux")]
+    fn apply_linux_optimizations(socket: &Socket) -> Result<(), SError> {
+        use std::os::fd::AsRawFd;
+        let fd = socket.as_raw_fd();
+
+        unsafe {
+            let enable: libc::c_int = 1;
+            
+            let _ = libc::setsockopt(
+                fd,
+                libc::IPPROTO_UDP,
+                libc::UDP_GRO,
+                &enable as *const _ as *const libc::c_void,
+                std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+            );
+
+            let _ = libc::setsockopt(
+                fd,
+                libc::SOL_SOCKET,
+                libc::SO_BUSY_POLL,
+                &enable as *const _ as *const libc::c_void,
+                std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+            );
+
+            let _ = libc::setsockopt(
+                fd,
+                libc::SOL_SOCKET,
+                libc::SO_PREFER_BUSY_POLL,
+                &enable as *const _ as *const libc::c_void,
+                std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+            );
+        }
+
+        socket.set_nonblocking(true)?;
+        Ok(())
     }
 
     pub fn local_addr(&self) -> Result<SocketAddr, SError> {
@@ -37,6 +98,37 @@ impl UdpBatchSocket {
             .local_addr()
             .map(|a| a.as_socket().unwrap())
             .map_err(|e| SError::Io(e))
+    }
+
+    pub fn set_tos(&self, tos: u8) -> Result<(), SError> {
+        use std::os::fd::AsRawFd;
+        unsafe {
+            let _ = libc::setsockopt(
+                self.socket.as_raw_fd(),
+                libc::IPPROTO_IP,
+                libc::IP_TOS,
+                &tos as *const _ as *const libc::c_void,
+                std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+            );
+        }
+        Ok(())
+    }
+
+    pub fn set_priority(&self, _priority: u32) -> Result<(), SError> {
+        #[cfg(target_os = "linux")]
+        {
+            use std::os::fd::AsRawFd;
+            unsafe {
+                let _ = libc::setsockopt(
+                    self.socket.as_raw_fd(),
+                    libc::SOL_SOCKET,
+                    libc::SO_PRIORITY,
+                    &_priority as *const _ as *const libc::c_void,
+                    std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+                );
+            }
+        }
+        Ok(())
     }
 }
 
@@ -46,18 +138,21 @@ pub struct OptimizedUdpSession {
     socket: UdpSocket,
     #[allow(dead_code)]
     peer_addr: SocketAddr,
+    recv_buf: Vec<u8>,
 }
 
 impl OptimizedUdpSession {
     pub fn new(socket: UdpSocket, peer_addr: SocketAddr) -> Self {
-        Self { socket, peer_addr }
+        Self { 
+            socket, 
+            peer_addr,
+            recv_buf: vec![0u8; 65535],
+        }
     }
 
     pub async fn recv_from(&mut self) -> Result<(Bytes, SocketAddr), SError> {
-        let mut buf = vec![0u8; 65535];
-        let (len, addr) = self.socket.recv_from(&mut buf).await?;
-        buf.truncate(len);
-        Ok((Bytes::from(buf), addr))
+        let (len, addr) = self.socket.recv_from(&mut self.recv_buf).await?;
+        Ok((Bytes::copy_from_slice(&self.recv_buf[..len]), addr))
     }
 
     pub async fn send_to(&self, buf: Bytes, addr: SocketAddr) -> Result<usize, SError> {
@@ -75,6 +170,17 @@ impl UdpWorker {
     pub fn new(addr: SocketAddr) -> Result<Self, SError> {
         Ok(Self {
             socket: Arc::new(UdpBatchSocket::new(addr)?),
+            running: Arc::new(AtomicBool::new(true)),
+        })
+    }
+
+    pub fn new_with_buffer_size(
+        addr: SocketAddr, 
+        recv_buf_size: usize, 
+        send_buf_size: usize,
+    ) -> Result<Self, SError> {
+        Ok(Self {
+            socket: Arc::new(UdpBatchSocket::with_buffer_size(addr, recv_buf_size, send_buf_size)?),
             running: Arc::new(AtomicBool::new(true)),
         })
     }
@@ -115,7 +221,13 @@ impl PacketQueue {
 
     #[inline]
     pub fn push(&self, packet: (Bytes, SocketAddr, SocketAddr)) {
-        let _ = self.queue.push(packet);
+        self.queue.push(packet);
+    }
+
+    #[inline]
+    pub fn try_push(&self, packet: (Bytes, SocketAddr, SocketAddr)) -> bool {
+        self.queue.push(packet);
+        true
     }
 
     #[inline]

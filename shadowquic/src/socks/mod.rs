@@ -7,7 +7,7 @@ use tracing::warn;
 
 use crate::{
     UdpRecv, UdpSend,
-    arena::packet_buf_sized,
+    utils::memory_pool::fast_alloc,
     error::SError,
     msgs::socks5::{self, SocksAddr, UdpReqHeader},
 };
@@ -21,8 +21,8 @@ pub struct UdpSocksWrap(Arc<UdpSocket>, OnceCell<SocketAddr>); // remote addr
 #[async_trait]
 impl UdpRecv for UdpSocksWrap {
     async fn recv_from(&mut self) -> Result<(Bytes, SocksAddr), SError> {
-        // Use buffer pool for allocation
-        let mut buf = packet_buf_sized(2000);
+        // Use fast allocator for allocation
+        let mut buf = fast_alloc(2000);
         buf.resize(2000, 0);
 
         let (len, dst) = self.0.recv_from(&mut buf).await?;
@@ -55,9 +55,9 @@ impl UdpSend for UdpSocksWrap {
         let mut header = Vec::with_capacity(64);
         reply.encode(&mut header).await?;
 
-        // Use buffer pool
+        // Use fast allocator
         let total_size = header.len() + buf.len();
-        let mut buf_new = packet_buf_sized(total_size);
+        let mut buf_new = fast_alloc(total_size);
         buf_new.put_slice(&header);
         buf_new.put(buf);
 

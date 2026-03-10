@@ -28,15 +28,17 @@ pub mod id;
 pub mod metrics;
 
 pub use pool::{
-    BufferPool, IdAllocator, OptimizedSessionData, OptimizedStatsSnapshot, PerCoreSessionManager,
-    PoolConfig, PoolStats, PooledConnectionStats, SessionData, SessionId, SessionIdGenerator,
-    SessionManager, SessionStats, SessionStatsSnapshot, SessionType, ShardedConnectionPool,
-    ShardedIdAllocator,
+    BufferPool, FastSessionData, FastSessionManager, FastSessionStats, FastSessionStatsSnapshot,
+    FastSessionType, FastShardedSessionManager, IdAllocator, OptimizedSessionData,
+    OptimizedStatsSnapshot, PerCoreSessionManager, PoolConfig, PoolStats, PooledConnectionStats,
+    SessionData, SessionId, SessionIdGenerator, SessionManager, SessionStats, SessionStatsSnapshot,
+    SessionType, ShardedConnectionPool, ShardedIdAllocator,
+    fast_create_session, fast_get_session, fast_release_session, fast_close_session,
 };
 
 pub use arena::{
     PACKET_ARENA, PACKET_ARENA_OPTIMIZED, PacketArena, PacketArenaOptimized, packet_buf,
-    packet_buf_large, packet_buf_put, packet_buf_sized,
+    packet_buf_large, packet_buf_put, packet_buf_sized, HUGE_PAGE_ALLOCATOR, huge_page_buf, huge_page_buf_put,
 };
 pub use id::optimized::{
     LockFreeIdGenerator, PaddedAtomicU64, PerCpuCounter, ShardedIdGeneratorOptimized,

@@ -17,6 +17,7 @@ use tokio::{
 use tracing::{Instrument, Level, debug, error, event, info, trace};
 
 use crate::arena::{packet_buf_large, packet_buf_sized};
+use crate::utils::memory_pool::{fast_alloc, fast_alloc_small, fast_alloc_medium, fast_alloc_large};
 
 use crate::{
     AnyUdpRecv, AnyUdpSend,
@@ -279,7 +280,7 @@ pub async fn handle_udp_send<C: QuicConnection>(
     STATS.connection_opened();
 
     // Pre-allocated buffers to avoid per-packet allocation
-    let mut datagram_buf = packet_buf_large();
+    let mut datagram_buf = fast_alloc_large();
     let mut header_buf = Vec::with_capacity(64);
     // Stack buffer for small packets (avoid heap allocation)
     let mut stack_buf = [0u8; 256];
@@ -326,8 +327,8 @@ pub async fn handle_udp_send<C: QuicConnection>(
                 stack_buf[header_buf.len()..combined_len].copy_from_slice(&bytes);
                 uni_conn.write_all(&stack_buf[..combined_len]).await?;
             } else {
-                // Large packet: use arena buffer
-                let mut combined = packet_buf_sized(combined_len);
+                // Large packet: use fast allocator
+                let mut combined = fast_alloc(combined_len);
                 combined.extend_from_slice(&header_buf);
                 combined.extend_from_slice(&bytes);
                 uni_conn.write_all(&combined).await?;
@@ -350,7 +351,7 @@ pub async fn handle_udp_send<C: QuicConnection>(
                     .await?;
             } else {
                 // Need larger buffer
-                datagram_buf = packet_buf_sized(total_len);
+                datagram_buf = fast_alloc(total_len);
                 datagram_buf.extend_from_slice(&header_buf);
                 datagram_buf.extend_from_slice(&bytes);
                 quic_conn
@@ -457,7 +458,7 @@ pub async fn handle_udp_packet_recv<C: QuicConnection>(conn: SQConn<C>) -> Resul
 
                 // Batch receive and send for better throughput
                 tokio::spawn(async move {
-                    let mut buf = packet_buf_large();
+                    let mut buf = fast_alloc_large();
                     loop {
                         let l: usize = match u16::decode(&mut uni_stream).await {
                             Ok(l) => l as usize,
@@ -465,7 +466,7 @@ pub async fn handle_udp_packet_recv<C: QuicConnection>(conn: SQConn<C>) -> Resul
                         };
 
                         if l > buf.capacity() {
-                            buf = packet_buf_sized(l);
+                            buf = fast_alloc(l);
                         }
                         buf.clear();
                         buf.resize(l, 0);
