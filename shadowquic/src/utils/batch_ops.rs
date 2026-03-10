@@ -4,23 +4,6 @@ use bytes::Bytes;
 use std::net::SocketAddr;
 use std::ops::{Deref, DerefMut};
 
-#[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
-use std::arch::x86::*;
-
-#[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
-use std::arch::x86_64::_mm_add_epi32;
-#[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
-use std::arch::x86_64::_mm_cmpgt_epi32;
-#[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
-use std::arch::x86_64::_mm_loadu_si128;
-#[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
-use std::arch::x86_64::_mm_max_epu32;
-#[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
-use std::arch::x86_64::_mm_storeu_si128;
-
-#[cfg(target_arch = "aarch64")]
-use std::arch::aarch64::*;
-
 pub const BATCH_SIZE: usize = 32;
 pub const CACHE_LINE_SIZE: usize = 64;
 
@@ -116,7 +99,11 @@ impl DerefMut for PacketBatch {
 
 #[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
 mod simd {
-    use super::*;
+    #[cfg(target_arch = "x86_64")]
+    use std::arch::x86_64::*;
+
+    #[cfg(target_arch = "x86")]
+    use std::arch::x86::*;
 
     #[target_feature(enable = "sse4.1")]
     #[inline]
@@ -185,7 +172,7 @@ mod simd {
 
 #[cfg(target_arch = "aarch64")]
 mod simd {
-    use super::*;
+    use std::arch::aarch64::*;
 
     #[inline]
     pub unsafe fn batch_copy_neon(src: &[u8], dst: &mut [u8], len: usize) {
@@ -206,8 +193,6 @@ mod simd {
 
 #[cfg(not(any(target_arch = "x86_64", target_arch = "x86", target_arch = "aarch64")))]
 mod simd {
-    use super::*;
-
     #[inline]
     pub unsafe fn batch_copy_fallback(src: &[u8], dst: &mut [u8], len: usize) {
         dst[..len].copy_from_slice(&src[..len]);
