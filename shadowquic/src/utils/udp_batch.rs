@@ -18,7 +18,11 @@ impl UdpBatchSocket {
         Self::with_buffer_size(addr, 0, 0)
     }
 
-    pub fn with_buffer_size(addr: SocketAddr, recv_buf_size: usize, send_buf_size: usize) -> Result<Self, SError> {
+    pub fn with_buffer_size(
+        addr: SocketAddr,
+        recv_buf_size: usize,
+        send_buf_size: usize,
+    ) -> Result<Self, SError> {
         let domain = if addr.is_ipv6() {
             Domain::IPV6
         } else {
@@ -38,7 +42,7 @@ impl UdpBatchSocket {
         if recv_buf_size > 0 {
             socket.set_recv_buffer_size(recv_buf_size)?;
         }
-        
+
         if send_buf_size > 0 {
             socket.set_send_buffer_size(send_buf_size)?;
         }
@@ -48,8 +52,8 @@ impl UdpBatchSocket {
             Self::apply_linux_optimizations(&socket)?;
         }
 
-        Ok(Self { 
-            socket, 
+        Ok(Self {
+            socket,
             addr,
             recv_buf_size,
             send_buf_size,
@@ -63,7 +67,7 @@ impl UdpBatchSocket {
 
         unsafe {
             let enable: libc::c_int = 1;
-            
+
             let _ = libc::setsockopt(
                 fd,
                 libc::IPPROTO_UDP,
@@ -143,8 +147,8 @@ pub struct OptimizedUdpSession {
 
 impl OptimizedUdpSession {
     pub fn new(socket: UdpSocket, peer_addr: SocketAddr) -> Self {
-        Self { 
-            socket, 
+        Self {
+            socket,
             peer_addr,
             recv_buf: vec![0u8; 65535],
         }
@@ -175,12 +179,16 @@ impl UdpWorker {
     }
 
     pub fn new_with_buffer_size(
-        addr: SocketAddr, 
-        recv_buf_size: usize, 
+        addr: SocketAddr,
+        recv_buf_size: usize,
         send_buf_size: usize,
     ) -> Result<Self, SError> {
         Ok(Self {
-            socket: Arc::new(UdpBatchSocket::with_buffer_size(addr, recv_buf_size, send_buf_size)?),
+            socket: Arc::new(UdpBatchSocket::with_buffer_size(
+                addr,
+                recv_buf_size,
+                send_buf_size,
+            )?),
             running: Arc::new(AtomicBool::new(true)),
         })
     }

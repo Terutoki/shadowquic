@@ -8,6 +8,7 @@ use crate::{
         SOCKS5_CMD_TCP_CONNECT, SOCKS5_CMD_UDP_ASSOCIATE, SOCKS5_REPLY_SUCCEEDED, SOCKS5_RESERVE,
         SOCKS5_VERSION,
     },
+    pool::fast_close_session,
     socks::UdpSocksWrap,
 };
 use tokio::{
@@ -130,8 +131,18 @@ impl SocksClient {
         socksreq.encode(&mut tcp).await?;
         let _rep = CmdReply::decode(&mut tcp).await?;
         tracing::trace!("socks tcp connection established");
-        copy_bidirectional_with_sizes(&mut tcp, &mut tcp_session.stream, 262144, 262144).await?;
-        Ok(())
+
+        // Close session tracking before copy as it may take a long time
+        let session_id = tcp_session.session_id.take().map(|s| s.id);
+        let result =
+            copy_bidirectional_with_sizes(&mut tcp, &mut tcp_session.stream, 262144, 262144).await;
+
+        // Close session tracking
+        if let Some(id) = session_id {
+            fast_close_session(id);
+        }
+
+        Ok(result.map(|_| ())?)
     }
 
     async fn handle_udp(&self, mut udp_session: UdpSession) -> Result<(), SError> {
@@ -247,8 +258,13 @@ impl SocksClient {
         };
         // We can use spawn, but it requirs communication to shutdown the other
         // Flatten spawn handle using try_join! doesn't work. Don't know why
-        tokio::try_join!(fut1, fut2, fut3)?;
+        let result = tokio::try_join!(fut1, fut2, fut3);
 
-        Ok(())
+        // Close session tracking
+        if let Some(session) = udp_session.session_id.take() {
+            fast_close_session(session.id);
+        }
+
+        result.map(|_| ())
     }
 }

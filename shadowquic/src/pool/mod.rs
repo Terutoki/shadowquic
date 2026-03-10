@@ -20,5 +20,5 @@ pub use optimized_session::{
 };
 
 pub use fast_session::{
-    fast_create_session, fast_get_session, fast_release_session, fast_close_session,
+    fast_close_session, fast_create_session, fast_get_session, fast_release_session,
 };

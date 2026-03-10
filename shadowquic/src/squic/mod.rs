@@ -17,8 +17,10 @@ use tokio::{
 use tracing::{Instrument, Level, debug, error, event, info, trace};
 
 use crate::arena::{packet_buf_large, packet_buf_sized};
-use crate::utils::memory_pool::{fast_alloc, fast_alloc_small, fast_alloc_medium, fast_alloc_large};
 use crate::utils::lock_free_ring::LockFreeRingBuffer;
+use crate::utils::memory_pool::{
+    fast_alloc, fast_alloc_large, fast_alloc_medium, fast_alloc_small,
+};
 
 use crate::{
     AnyUdpRecv, AnyUdpSend,
@@ -503,12 +505,20 @@ impl BatchPacketProcessor {
     }
 
     #[inline]
-    pub fn push_packet(&self, id: u16, payload: bytes::Bytes, addr: SocksAddr, udp: Option<(AnyUdpSend, SocksAddr)>) -> bool {
+    pub fn push_packet(
+        &self,
+        id: u16,
+        payload: bytes::Bytes,
+        addr: SocksAddr,
+        udp: Option<(AnyUdpSend, SocksAddr)>,
+    ) -> bool {
         if let Some((_sender, dst)) = udp {
             let entry = crate::utils::lock_free_ring::RingEntry {
                 data: payload,
                 src_addr: "0.0.0.0:0".parse().unwrap(),
-                dst_addr: format!("{}:{}", dst.addr, dst.port).parse().unwrap_or_else(|_| "0.0.0.0:0".parse().unwrap()),
+                dst_addr: format!("{}:{}", dst.addr, dst.port)
+                    .parse()
+                    .unwrap_or_else(|_| "0.0.0.0:0".parse().unwrap()),
             };
             self.ring.push(entry)
         } else {

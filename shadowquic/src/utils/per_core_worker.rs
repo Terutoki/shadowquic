@@ -1,5 +1,5 @@
 use crate::error::SError;
-use crate::pool::optimized_session::OptimizedSessionManager;
+use crate::pool::FastShardedSessionManager;
 use crate::utils::udp_batch::PacketQueue;
 use bytes::Bytes;
 use std::net::SocketAddr;
@@ -35,7 +35,7 @@ pub struct WorkerLocal {
     id: usize,
     cpu_id: usize,
     packet_queue: PacketQueue,
-    session_manager: OptimizedSessionManager,
+    session_manager: FastShardedSessionManager,
     stats: WorkerStats,
     running: AtomicBool,
 }
@@ -54,7 +54,7 @@ impl WorkerLocal {
             id,
             cpu_id,
             packet_queue: PacketQueue::new(4096),
-            session_manager: OptimizedSessionManager::new(),
+            session_manager: FastShardedSessionManager::new(16),
             stats: WorkerStats::default(),
             running: AtomicBool::new(false),
         }
@@ -76,7 +76,7 @@ impl WorkerLocal {
     }
 
     #[inline]
-    pub fn session_manager(&self) -> &OptimizedSessionManager {
+    pub fn session_manager(&self) -> &FastShardedSessionManager {
         &self.session_manager
     }
 

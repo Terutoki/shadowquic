@@ -32,13 +32,14 @@ pub use pool::{
     FastSessionType, FastShardedSessionManager, IdAllocator, OptimizedSessionData,
     OptimizedStatsSnapshot, PerCoreSessionManager, PoolConfig, PoolStats, PooledConnectionStats,
     SessionData, SessionId, SessionIdGenerator, SessionManager, SessionStats, SessionStatsSnapshot,
-    SessionType, ShardedConnectionPool, ShardedIdAllocator,
-    fast_create_session, fast_get_session, fast_release_session, fast_close_session,
+    SessionType, ShardedConnectionPool, ShardedIdAllocator, fast_close_session,
+    fast_create_session, fast_get_session, fast_release_session,
 };
 
 pub use arena::{
-    PACKET_ARENA, PACKET_ARENA_OPTIMIZED, PacketArena, PacketArenaOptimized, packet_buf,
-    packet_buf_large, packet_buf_put, packet_buf_sized, HUGE_PAGE_ALLOCATOR, huge_page_buf, huge_page_buf_put,
+    HUGE_PAGE_ALLOCATOR, PACKET_ARENA, PACKET_ARENA_OPTIMIZED, PacketArena, PacketArenaOptimized,
+    huge_page_buf, huge_page_buf_put, packet_buf, packet_buf_large, packet_buf_put,
+    packet_buf_sized,
 };
 pub use id::optimized::{
     LockFreeIdGenerator, PaddedAtomicU64, PerCpuCounter, ShardedIdGeneratorOptimized,
@@ -64,16 +65,18 @@ pub trait UdpRecv: Send + Sync + Unpin {
     async fn recv_from(&mut self) -> Result<(Bytes, SocksAddr), SError>; // socksaddr is proxy addr
 }
 pub struct TcpSession<IO = AnyTcp> {
-    stream: IO,
-    dst: SocksAddr,
+    pub stream: IO,
+    pub dst: SocksAddr,
+    pub session_id: Option<FastSessionData>,
 }
 
 pub struct UdpSession<I = AnyUdpRecv, O = AnyUdpSend> {
-    recv: I,
-    send: O,
+    pub recv: I,
+    pub send: O,
     /// Control stream, should be kept alive during session.
-    stream: Option<AnyTcp>,
-    bind_addr: SocksAddr,
+    pub stream: Option<AnyTcp>,
+    pub bind_addr: SocksAddr,
+    pub session_id: Option<FastSessionData>,
 }
 
 pub type AnyTcp = Box<dyn TcpTrait>;

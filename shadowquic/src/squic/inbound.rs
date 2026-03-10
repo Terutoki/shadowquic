@@ -88,6 +88,7 @@ impl<C: QuicConnection> SQServerConn<C> {
                 let tcp: TcpSession = TcpSession {
                     stream: Box::new(Unsplit { s: send, r: recv }),
                     dst,
+                    session_id: None,
                 };
                 req_send
                     .send(ProxyRequest::Tcp(tcp))
@@ -107,6 +108,7 @@ impl<C: QuicConnection> SQServerConn<C> {
                     recv: Box::new(udp_recv),
                     stream: None,
                     bind_addr: dst.clone(),
+                    session_id: None,
                 };
                 let local_send = Arc::new(local_send);
                 let over_stream = matches!(req, SQReq::SQAssociatOverStream(_));

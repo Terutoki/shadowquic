@@ -1,4 +1,4 @@
-use std::net::SocketAddr;
+use std::net::{SocketAddr, ToSocketAddrs};
 use std::sync::Arc;
 
 use crate::config::{AuthUser, SocksServerCfg};
@@ -9,6 +9,8 @@ use crate::msgs::socks5::{
     SOCKS5_CMD_TCP_CONNECT, SOCKS5_CMD_UDP_ASSOCIATE, SOCKS5_REPLY_SUCCEEDED, SOCKS5_VERSION,
 };
 use crate::msgs::{SDecode, SEncode};
+use crate::pool::FastSessionType;
+use crate::pool::fast_create_session;
 use crate::utils::dual_socket::to_ipv4_mapped;
 use crate::{Inbound, ProxyRequest, TcpSession, UdpSession};
 use async_trait::async_trait;
@@ -157,18 +159,48 @@ impl Inbound for SocksServer {
             .handle_socks(stream, local_addr)
             .instrument(span)
             .await?;
+
+        // Create session tracking
+        let remote_socket_addr = req
+            .dst
+            .to_socket_addrs()
+            .ok()
+            .and_then(|mut addrs| addrs.next());
+
         match req.cmd {
-            SOCKS5_CMD_TCP_CONNECT => Ok(ProxyRequest::Tcp(TcpSession {
-                stream: Box::new(s),
-                dst: req.dst,
-            })),
+            SOCKS5_CMD_TCP_CONNECT => {
+                let session_id = if let Some(raddr) = remote_socket_addr {
+                    Some(fast_create_session(
+                        raddr,
+                        req.dst.clone(),
+                        FastSessionType::Tcp,
+                    ))
+                } else {
+                    None
+                };
+                Ok(ProxyRequest::Tcp(TcpSession {
+                    stream: Box::new(s),
+                    dst: req.dst,
+                    session_id,
+                }))
+            }
             SOCKS5_CMD_UDP_ASSOCIATE => {
+                let session_id = if let Some(raddr) = remote_socket_addr {
+                    Some(fast_create_session(
+                        raddr,
+                        req.dst.clone(),
+                        FastSessionType::UdpDatagram,
+                    ))
+                } else {
+                    None
+                };
                 let socket = Arc::new(socket.unwrap());
                 Ok(ProxyRequest::Udp(UdpSession {
                     send: Arc::new(UdpSocksWrap(socket.clone(), Default::default())),
                     recv: Box::new(UdpSocksWrap(socket, Default::default())),
                     bind_addr: req.dst,
                     stream: Some(Box::new(s)),
+                    session_id,
                 }))
             }
             _ => {

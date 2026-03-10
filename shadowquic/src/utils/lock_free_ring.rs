@@ -1,8 +1,8 @@
 use bytes::Bytes;
 use std::cell::UnsafeCell;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 pub const RING_SIZE: usize = 4096;
 pub const RING_MASK: usize = RING_SIZE - 1;

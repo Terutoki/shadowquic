@@ -7,9 +7,9 @@ use tracing::warn;
 
 use crate::{
     UdpRecv, UdpSend,
-    utils::memory_pool::fast_alloc,
     error::SError,
     msgs::socks5::{self, SocksAddr, UdpReqHeader},
+    utils::memory_pool::fast_alloc,
 };
 
 use crate::msgs::{SDecode, SEncode};
