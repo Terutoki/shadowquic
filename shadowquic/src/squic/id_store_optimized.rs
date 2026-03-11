@@ -1,12 +1,12 @@
-use std::sync::atomic::{AtomicUsize, AtomicU32, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 
 use crossbeam::utils::CachePadded;
 use tokio::sync::watch;
 
+use crate::AnyUdpSend;
 use crate::error::SError;
 use crate::msgs::socks5::SocksAddr;
-use crate::AnyUdpSend;
 
 const SHARD_COUNT: usize = 64;
 const MAX_UDP_SESSIONS: usize = 65536;
@@ -89,7 +89,11 @@ impl UdpIdStore {
             }
             SLOT_EMPTY => {
                 let zero = 0u32;
-                if slot.state.compare_exchange(zero, SLOT_PENDING, Ordering::AcqRel, Ordering::Relaxed).is_ok() {
+                if slot
+                    .state
+                    .compare_exchange(zero, SLOT_PENDING, Ordering::AcqRel, Ordering::Relaxed)
+                    .is_ok()
+                {
                     let (tx, rx) = watch::channel(());
                     {
                         let mut notifier = slot.notifier.lock().await;
@@ -110,7 +114,9 @@ impl UdpIdStore {
                     notifier.as_ref().map(|tx| tx.subscribe())
                 };
                 if let Some(mut rx) = rx {
-                    rx.changed().await.map_err(|_| SError::UDPSessionClosed("closed".into()))?;
+                    rx.changed()
+                        .await
+                        .map_err(|_| SError::UDPSessionClosed("closed".into()))?;
                     let data = slot.data.lock().await;
                     if let Some(d) = data.as_ref() {
                         return Ok((d.udp.clone(), d.addr.clone()));
@@ -177,8 +183,8 @@ impl Default for UdpIdStore {
     }
 }
 
-use std::ptr::NonNull;
 use std::alloc::Layout;
+use std::ptr::NonNull;
 
 pub struct LockFreeIdTable {
     table: NonNull<IdEntry>,
@@ -198,27 +204,33 @@ impl LockFreeIdTable {
     pub fn new(capacity: usize) -> Self {
         let layout = Layout::array::<IdEntry>(capacity).unwrap();
         let table = unsafe { std::alloc::alloc_zeroed(layout) as *mut IdEntry };
-        
+
         for i in 0..capacity {
             unsafe {
-                std::ptr::write(table.add(i), IdEntry {
+                std::ptr::write(
+                    table.add(i),
+                    IdEntry {
+                        id: 0,
+                        state: AtomicU32::new(0),
+                        udp: None,
+                        addr: None,
+                        next: AtomicUsize::new(i + 1),
+                    },
+                );
+            }
+        }
+
+        unsafe {
+            std::ptr::write(
+                table.add(capacity - 1),
+                IdEntry {
                     id: 0,
                     state: AtomicU32::new(0),
                     udp: None,
                     addr: None,
-                    next: AtomicUsize::new(i + 1),
-                });
-            }
-        }
-        
-        unsafe {
-            std::ptr::write(table.add(capacity - 1), IdEntry {
-                id: 0,
-                state: AtomicU32::new(0),
-                udp: None,
-                addr: None,
-                next: AtomicUsize::new(0),
-            });
+                    next: AtomicUsize::new(0),
+                },
+            );
         }
 
         Self {
@@ -247,7 +259,11 @@ impl LockFreeIdTable {
         unsafe {
             let ptr = self.table.as_ptr().add((id as usize) % self.capacity);
             let expected = SLOT_EMPTY;
-            if (*ptr).state.compare_exchange(expected, SLOT_PENDING, Ordering::AcqRel, Ordering::Relaxed).is_ok() {
+            if (*ptr)
+                .state
+                .compare_exchange(expected, SLOT_PENDING, Ordering::AcqRel, Ordering::Relaxed)
+                .is_ok()
+            {
                 (*ptr).udp = Some(udp);
                 (*ptr).addr = Some(addr);
                 (*ptr).id = id;
@@ -281,6 +297,9 @@ impl LockFreeIdTable {
         self.len.load(Ordering::Relaxed)
     }
 }
+
+unsafe impl Send for LockFreeIdTable {}
+unsafe impl Sync for LockFreeIdTable {}
 
 impl Drop for LockFreeIdTable {
     fn drop(&mut self) {

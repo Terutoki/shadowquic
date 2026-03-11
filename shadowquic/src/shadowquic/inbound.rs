@@ -12,7 +12,7 @@ use crate::{
     squic::inbound::SQServerConn,
 };
 
-use crate::squic::{IDStore, SQConn};
+use crate::squic::{IDStore, LockFreeIdTable, SQConn};
 
 use super::quinn_wrapper::EndServer;
 use crate::quic::QuicServer;
@@ -43,6 +43,7 @@ impl ShadowQuicServer {
                 authed: Arc::new(SetOnce::new_with(Some(true))),
                 send_id_store: Default::default(),
                 recv_id_store: IDStore::default(),
+                lock_free_id_table: Arc::new(LockFreeIdTable::new(1024)),
             },
             users: Arc::new(Default::default()),
         };

@@ -34,18 +34,22 @@ use crate::{
     quic::{QuicConnection, STATS},
 };
 
+mod id_store_optimized;
 pub mod inbound;
 pub mod outbound;
 
+pub use id_store_optimized::LockFreeIdTable;
+
 /// SQuic connection, it is shared by sunnyquic and shadowquic and is a wrapper of quic connection.
 /// It contains a connection object and two ID store for managing UDP sockets.
-/// The IDStore stores the mapping between ids and the destionation addresses as well as associated sockets
+/// The IDStore stores the mapping between ids and the destination addresses as well as associated sockets
 #[derive(Clone)]
 pub struct SQConn<T: QuicConnection> {
     pub(crate) conn: T,
     pub(crate) authed: Arc<SetOnce<bool>>,
     pub(crate) send_id_store: IDStore<()>,
     pub(crate) recv_id_store: IDStore<(AnyUdpSend, SocksAddr)>,
+    pub(crate) lock_free_id_table: Arc<LockFreeIdTable>,
 }
 
 async fn wait_sunny_auth<T: QuicConnection>(conn: &SQConn<T>) -> SResult<()> {
@@ -229,11 +233,16 @@ impl<W: AsyncWrite> Drop for AssociateSendSession<W> {
 struct AssociateRecvSession {
     id_store: IDStore<(AnyUdpSend, SocksAddr)>,
     id_map: AHashMap<u16, SocksAddr>,
+    lock_free_table: Arc<LockFreeIdTable>,
 }
 impl AssociateRecvSession {
     pub async fn store_socket(&mut self, id: u16, dst: SocksAddr, socks: AnyUdpSend) {
         if let hash_map::Entry::Vacant(e) = self.id_map.entry(id) {
-            self.id_store.store_socket(id, (socks, dst.clone())).await;
+            self.id_store
+                .store_socket(id, (socks.clone(), dst.clone()))
+                .await;
+            // Also insert into lock-free table for fast path
+            self.lock_free_table.insert(id, socks, dst.clone());
             trace!("recv session: insert id:{}, addr:{}", id, dst);
             e.insert(dst);
         }
@@ -376,6 +385,7 @@ pub async fn handle_udp_recv_ctrl<C: QuicConnection>(
     let mut session = AssociateRecvSession {
         id_store: conn.recv_id_store.clone(),
         id_map: AHashMap::with_capacity(16),
+        lock_free_table: conn.lock_free_id_table.clone(),
     };
     loop {
         let SQUdpControlHeader { id, dst } = SQUdpControlHeader::decode(&mut recv).await?;
@@ -387,9 +397,10 @@ pub async fn handle_udp_recv_ctrl<C: QuicConnection>(
 }
 
 /// Handle udp packet receive task - OPTIMIZED
-/// Uses try_get first for fast path, avoids async lock in common case
+/// Uses lock-free lookup first for maximum performance
 pub async fn handle_udp_packet_recv<C: QuicConnection>(conn: SQConn<C>) -> Result<(), SError> {
     let id_store = conn.recv_id_store.clone();
+    let lock_free_table = conn.lock_free_id_table.clone();
 
     wait_sunny_auth(&conn).await?;
     STATS.connection_opened();
@@ -403,36 +414,40 @@ pub async fn handle_udp_packet_recv<C: QuicConnection>(conn: SQConn<C>) -> Resul
                     continue;
                 }
 
-                // FAST PATH: Try lock-free lookup first
+                // FAST PATH: Try lock-free lookup first (sync, no await)
                 let id = u16::from_be_bytes([b[0], b[1]]);
                 let payload = b.slice(2..);
 
-                // Try immediate lookup (sync, no await)
-                if let Some((udp, addr)) = id_store.try_get_socket(id).await {
-                    // Fast path: direct send without spawning task
+                if let Some((udp, addr)) = lock_free_table.try_get(id) {
+                    // Fast path: direct send without async lock
                     let _ = udp.send_to(payload, addr).await;
                     continue;
                 }
 
-                // SLOW PATH: Need to wait or spawn
+                // SLOW PATH: Fall back to async HashMap lookup
                 match id_store.get_socket_or_notify(id).await {
                  Ok((udp, addr)) =>  {
-                    udp.send_to(payload, addr).await?;
+                     // Also insert into lock-free table for future fast path
+                     lock_free_table.insert(id, udp.clone(), addr.clone());
+                     udp.send_to(payload, addr).await?;
                  }
                  Err(mut notify) =>  {
-                    let id_store = id_store.clone();
-                    let src_addr = conn.remote_address();
-                    event!(Level::TRACE, "resolving datagram id:{}",id);
-                    let payload = b;
-                    tokio::spawn(async move {
-                        let _ = notify.changed().await.map_err(|_|debug!("id:{} notifier dropped",id));
-                        if let Some((udp, addr)) = id_store.try_get_socket(id).await {
-                            info!("udp over datagram: id:{}: {}->{}",id, src_addr, addr);
-                            let payload = payload.slice(2..);
-                            let _ = udp.send_to(payload, addr).await.map_err(|x|error!("{}",x));
-                        }
-                        Ok(()) as Result<(), SError>
-                     }.in_current_span());
+                     let id_store = id_store.clone();
+                     let lock_free_table = lock_free_table.clone();
+                     let src_addr = conn.remote_address();
+                     event!(Level::TRACE, "resolving datagram id:{}",id);
+                     let payload = b;
+                     tokio::spawn(async move {
+                         let _ = notify.changed().await.map_err(|_|debug!("id:{} notifier dropped",id));
+                         if let Some((udp, addr)) = id_store.try_get_socket(id).await {
+                             // Insert into lock-free table for future fast path
+                             lock_free_table.insert(id, udp.clone(), addr.clone());
+                             info!("udp over datagram: id:{}: {}->{}",id, src_addr, addr);
+                             let payload = payload.slice(2..);
+                             let _ = udp.send_to(payload, addr).await.map_err(|x|error!("{}",x));
+                         }
+                         Ok(()) as Result<(), SError>
+                      }.in_current_span());
                  }
             }
             }

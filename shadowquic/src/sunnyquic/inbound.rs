@@ -17,7 +17,7 @@ use crate::{
     sunnyquic::EndServer,
 };
 
-use crate::squic::{IDStore, SQConn};
+use crate::squic::{IDStore, LockFreeIdTable, SQConn};
 
 use crate::quic::QuicServer;
 pub struct SunnyQuicServer {
@@ -48,6 +48,7 @@ impl SunnyQuicServer {
                 authed: Arc::new(SetOnce::new()),
                 send_id_store: Default::default(),
                 recv_id_store: IDStore::default(),
+                lock_free_id_table: Arc::new(LockFreeIdTable::new(1024)),
             },
             users: user_hash,
         };

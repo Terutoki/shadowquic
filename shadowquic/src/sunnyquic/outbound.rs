@@ -17,7 +17,7 @@ use crate::{
     sunnyquic::gen_sunny_user_hash,
 };
 
-use crate::squic::{IDStore, SQConn, handle_udp_packet_recv};
+use crate::squic::{IDStore, LockFreeIdTable, SQConn, handle_udp_packet_recv};
 
 pub type SunnyQuicConn = SQConn<<EndClient as QuicClient>::C>;
 
@@ -72,6 +72,7 @@ impl SunnyQuicClient {
             authed: Arc::new(SetOnce::new()),
             send_id_store: Default::default(),
             recv_id_store: IDStore::default(),
+            lock_free_id_table: Arc::new(LockFreeIdTable::new(1024)),
         };
 
         let username = self.config.username.clone();
