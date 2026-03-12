@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
-use parking_lot::RwLock;
+use spin::RwLock;
 use rustc_hash::FxHasher;
 
 use crate::error::SError;
@@ -125,7 +125,7 @@ impl<C> ConnectionState<C> {
         self.conn.write().take()
     }
 
-    pub fn connection(&self) -> Option<parking_lot::RwLockReadGuard<'_, Option<C>>> {
+    pub fn connection(&self) -> Option<spin::RwLockReadGuard<'_, Option<C>>> {
         Some(self.conn.read())
     }
 }

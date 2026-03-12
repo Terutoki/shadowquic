@@ -3,7 +3,7 @@ use std::{
     sync::Arc,
 };
 
-use ahash::AHashMap;
+use rustc_hash::FxHashMap;
 
 use bytes::BytesMut;
 use tokio::{
@@ -70,7 +70,7 @@ impl Outbound for DirectOut {
 }
 
 #[derive(Default, Clone)]
-struct DnsResolve(Arc<Mutex<AHashMap<Vec<u8>, SocketAddr>>>);
+struct DnsResolve(Arc<Mutex<FxHashMap<Vec<u8>, SocketAddr>>>);
 impl DnsResolve {
     async fn resolve(
         &self,

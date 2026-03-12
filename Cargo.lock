@@ -2909,7 +2909,6 @@ dependencies = [
 name = "shadowquic"
 version = "0.3.3"
 dependencies = [
- "ahash",
  "anyhow",
  "arc-swap",
  "async-trait",
@@ -2925,6 +2924,7 @@ dependencies = [
  "lazy_static",
  "libc",
  "notify",
+ "once_cell",
  "parking_lot",
  "qbase",
  "qevent",
@@ -2943,6 +2943,7 @@ dependencies = [
  "shadowquic-macros",
  "slab",
  "socket2 0.6.2",
+ "spin",
  "thiserror 2.0.18",
  "time",
  "tokio",
@@ -3020,6 +3021,15 @@ name = "sorted-index-buffer"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ea06cc588e43c632923a55450401b8f25e628131571d4e1baea1bdfdb2b5ed06"
+
+[[package]]
+name = "spin"
+version = "0.9.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6980e8d7511241f8acf4aebddbb1ff938df5eebe98691418c4468d0b72a96a67"
+dependencies = [
+ "lock_api",
+]
 
 [[package]]
 name = "strsim"

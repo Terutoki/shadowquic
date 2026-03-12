@@ -1,12 +1,12 @@
 use std::{
-    collections::hash_map::{self, Entry},
+    collections::hash_map::{self, HashMap, Entry},
     mem::replace,
     ops::Deref,
     sync::Arc,
     time::Duration,
 };
 
-use ahash::AHashMap;
+use rustc_hash::{FxHashMap, FxBuildHasher};
 use tokio::{
     io::{AsyncReadExt, AsyncWrite, AsyncWriteExt},
     sync::{
@@ -90,13 +90,13 @@ type IDStoreVal<T> = Result<T, Sender<()>>;
 /// It also uses an atomic counter to generate unique ids for new sockets.
 #[derive(Clone)]
 pub(crate) struct IDStore<T = (AnyUdpSend, SocksAddr)> {
-    pub(crate) inner: Arc<RwLock<AHashMap<u16, IDStoreVal<T>>>>,
+    pub(crate) inner: Arc<RwLock<FxHashMap<u16, IDStoreVal<T>>>>,
 }
 
 impl<T> Default for IDStore<T> {
     fn default() -> Self {
         Self {
-            inner: Arc::new(RwLock::new(AHashMap::with_capacity(64))),
+            inner: Arc::new(RwLock::new(HashMap::with_capacity_and_hasher(64, FxBuildHasher))),
         }
     }
 }
@@ -180,8 +180,8 @@ where
 /// When session ended, the ids created by this session will be removed from the IDStore.
 struct AssociateSendSession<W: AsyncWrite> {
     id_store: IDStore<()>,
-    dst_map: AHashMap<SocksAddr, u16>,
-    unistream_map: AHashMap<SocksAddr, W>,
+    dst_map: FxHashMap<SocksAddr, u16>,
+    unistream_map: FxHashMap<SocksAddr, W>,
 }
 impl<W: AsyncWrite> AssociateSendSession<W> {
     pub async fn get_id_or_insert(&mut self, addr: &SocksAddr) -> (u16, bool) {
@@ -232,7 +232,7 @@ impl<W: AsyncWrite> Drop for AssociateSendSession<W> {
 /// Second. it records ids created by this session and clean those ids when session ended.
 struct AssociateRecvSession {
     id_store: IDStore<(AnyUdpSend, SocksAddr)>,
-    id_map: AHashMap<u16, SocksAddr>,
+    id_map: FxHashMap<u16, SocksAddr>,
     lock_free_table: Arc<LockFreeIdTable>,
 }
 impl AssociateRecvSession {
@@ -285,8 +285,8 @@ pub async fn handle_udp_send<C: QuicConnection>(
     let mut down_stream = udp_recv;
     let mut session = AssociateSendSession {
         id_store: conn.send_id_store.clone(),
-        dst_map: AHashMap::with_capacity(16),
-        unistream_map: AHashMap::with_capacity(16),
+        dst_map: HashMap::with_capacity_and_hasher(16, FxBuildHasher),
+        unistream_map: HashMap::with_capacity_and_hasher(16, FxBuildHasher),
     };
     let quic_conn = conn.conn.clone();
     STATS.connection_opened();
@@ -384,7 +384,7 @@ pub async fn handle_udp_recv_ctrl<C: QuicConnection>(
 ) -> Result<(), SError> {
     let mut session = AssociateRecvSession {
         id_store: conn.recv_id_store.clone(),
-        id_map: AHashMap::with_capacity(16),
+        id_map: HashMap::with_capacity_and_hasher(16, FxBuildHasher),
         lock_free_table: conn.lock_free_id_table.clone(),
     };
     loop {

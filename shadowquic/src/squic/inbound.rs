@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use std::{pin::Pin, sync::Arc};
 
-use ahash::AHashMap;
+use rustc_hash::FxHashMap;
 use tokio::{
     io::{AsyncRead, AsyncWrite},
     select,
@@ -23,7 +23,7 @@ use crate::{
 
 use super::{SQConn, handle_udp_packet_recv, handle_udp_recv_ctrl, handle_udp_send};
 
-pub type SunnyQuicUsers = Arc<AHashMap<SunnyCredential, String>>;
+pub type SunnyQuicUsers = Arc<FxHashMap<SunnyCredential, String>>;
 
 #[derive(Clone)]
 pub struct SQServerConn<C: QuicConnection> {

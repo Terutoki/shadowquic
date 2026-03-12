@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use std::sync::Arc;
 
-use ahash::AHashMap;
+use rustc_hash::FxHashMap;
 use tokio::sync::{
     SetOnce,
     mpsc::{Receiver, Sender, channel},
@@ -61,7 +61,7 @@ impl SunnyQuicServer {
         Ok(())
     }
     fn gen_users_hash(&self) -> SunnyQuicUsers {
-        let users = AHashMap::from_iter(self.config.users.iter().map(|x| {
+        let users = FxHashMap::from_iter(self.config.users.iter().map(|x| {
             let hash = crate::sunnyquic::gen_sunny_user_hash(&x.username, &x.password);
             (hash, x.username.clone())
         }));

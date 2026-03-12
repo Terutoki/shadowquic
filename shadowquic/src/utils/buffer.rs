@@ -1,12 +1,10 @@
 use bytes::BytesMut;
-use lazy_static::lazy_static;
+use once_cell::sync::Lazy;
 
 use crate::BufferPool;
 
-lazy_static! {
-    pub static ref GLOBAL_BUFFER_POOL: BufferPool = BufferPool::new(4096);
-    pub static ref LARGE_BUFFER_POOL: BufferPool = BufferPool::new(1024);
-}
+static GLOBAL_BUFFER_POOL: Lazy<BufferPool> = Lazy::new(|| BufferPool::new(4096));
+static LARGE_BUFFER_POOL: Lazy<BufferPool> = Lazy::new(|| BufferPool::new(1024));
 
 #[inline]
 pub fn alloc_buffer() -> BytesMut {
