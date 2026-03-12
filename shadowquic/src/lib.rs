@@ -50,6 +50,7 @@ pub use metrics::{GLOBAL_METRICS, Metrics, MetricsSnapshot};
 
 pub use msgs::SDecode;
 pub use msgs::SEncode;
+pub use msgs::{encode_to_async, SDecodeSync, SEncodeSync, VarInt};
 pub enum ProxyRequest<T = AnyTcp, I = AnyUdpRecv, O = AnyUdpSend> {
     Tcp(TcpSession<T>),
     Udp(UdpSession<I, O>),

@@ -8,7 +8,7 @@ use crate::msgs::socks5::{
     SOCKS5_AUTH_METHOD_NONE, SOCKS5_AUTH_METHOD_PASSWORD, SOCKS5_CMD_TCP_BIND,
     SOCKS5_CMD_TCP_CONNECT, SOCKS5_CMD_UDP_ASSOCIATE, SOCKS5_REPLY_SUCCEEDED, SOCKS5_VERSION,
 };
-use crate::msgs::{SDecode, SEncode};
+use crate::msgs::{encode_to_async, SDecode, SEncode};
 use crate::pool::FastSessionType;
 use crate::pool::fast_create_session;
 use crate::utils::dual_socket::to_ipv4_mapped;
@@ -83,7 +83,7 @@ impl SocksServer {
             version: SOCKS5_VERSION,
             method,
         };
-        reply.encode(&mut stream).await?;
+        encode_to_async(&reply, &mut stream).await?;
         if self.users.is_empty() {
             return Ok(stream);
         }
@@ -100,7 +100,7 @@ impl SocksServer {
             version: 0x01, // authentication version not socks version
             status: SOCKS5_REPLY_SUCCEEDED,
         };
-        reply.encode(&mut stream).await?;
+        encode_to_async(&reply, &mut stream).await?;
         Ok(stream)
     }
     async fn handle_socks(
@@ -141,7 +141,7 @@ impl SocksServer {
             }
         };
 
-        reply.encode(&mut s).await?;
+        encode_to_async(&reply, &mut s).await?;
         trace!("socks request accepted: {}", req.dst);
         Ok((s, req, socket))
     }

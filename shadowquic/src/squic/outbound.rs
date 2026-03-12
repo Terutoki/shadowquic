@@ -9,7 +9,7 @@ use tracing::{Level, debug, error, info, span, trace};
 use crate::{
     ProxyRequest,
     error::SError,
-    msgs::{SEncode, socks5::SocksAddr, squic::SQReq},
+    msgs::{encode_to_async, socks5::SocksAddr, squic::SQReq},
     quic::QuicConnection,
     squic::{handle_udp_recv_ctrl, handle_udp_send},
 };
@@ -30,7 +30,7 @@ pub async fn handle_request<C: QuicConnection>(
                 debug!("bistream opened for tcp dst:{}", dst);
                 //let _enter = _span.enter();
                 let req = SQReq::SQConnect(tcp_session.dst);
-                req.encode(&mut send).await?;
+                encode_to_async(&req, &mut send).await?;
                 trace!("tcp connect req header sent");
 
                 let u = tokio::io::copy_bidirectional(
@@ -51,7 +51,7 @@ pub async fn handle_request<C: QuicConnection>(
                 } else {
                     SQReq::SQAssociatOverDatagram(udp_session.bind_addr)
                 };
-                req.encode(&mut send).await?;
+                encode_to_async(&req, &mut send).await?;
                 trace!("udp associate req header sent");
                 let fut2 = handle_udp_recv_ctrl(recv, udp_session.send.clone(), conn.clone());
                 let fut1 = handle_udp_send(send, udp_session.recv, conn, over_stream);
@@ -99,7 +99,7 @@ pub async fn connect_tcp<C: QuicConnection>(
     info!("bistream opened for tcp dst:{}", dst);
     //let _enter = _span.enter();
     let req = SQReq::SQConnect(dst);
-    req.encode(&mut send).await?;
+    encode_to_async(&req, &mut send).await?;
     trace!("req header sent");
 
     Ok(Unsplit { s: send, r: recv })
@@ -124,7 +124,7 @@ pub async fn associate_udp<C: QuicConnection>(
     } else {
         SQReq::SQAssociatOverDatagram(dst)
     };
-    req.encode(&mut send).await?;
+    encode_to_async(&req, &mut send).await?;
     let (local_send, udp_recv) = channel::<(Bytes, SocksAddr)>(256);
     let (udp_send, local_recv) = channel::<(Bytes, SocksAddr)>(256);
     let local_send = Arc::new(local_send);

@@ -1,9 +1,11 @@
 use std::sync::Arc;
 
+use bytes::{Buf, BufMut, Bytes, BytesMut};
+
 use crate::error::SError;
 
 use super::socks5::SocksAddr;
-use super::{SDecode, SEncode};
+use super::{SDecode, SEncode, SDecodeSync, SEncodeSync};
 use shadowquic_macros::{SDecode, SEncode};
 
 pub static SUNNY_QUIC_AUTH_LEN: usize = 64;
@@ -35,6 +37,109 @@ pub struct SQPacketStreamHeader {
 #[derive(SEncode, SDecode, Clone)]
 pub struct SQPacketDatagramHeader {
     pub id: u16, // id is one to one coresponance a udpsocket and proxy dst
+}
+
+impl SEncodeSync for SQReq {
+    fn encode_sync(&self, buf: &mut BytesMut) {
+        match self {
+            SQReq::SQConnect(addr) => {
+                buf.put_u8(0x1);
+                addr.encode_sync(buf);
+            }
+            SQReq::SQBind(addr) => {
+                buf.put_u8(0x2);
+                addr.encode_sync(buf);
+            }
+            SQReq::SQAssociatOverDatagram(addr) => {
+                buf.put_u8(0x3);
+                addr.encode_sync(buf);
+            }
+            SQReq::SQAssociatOverStream(addr) => {
+                buf.put_u8(0x4);
+                addr.encode_sync(buf);
+            }
+            SQReq::SQAuthenticate(cred) => {
+                buf.put_u8(0x5);
+                buf.extend_from_slice(cred.as_ref());
+            }
+        }
+    }
+}
+
+impl SDecodeSync for SQReq {
+    fn decode_sync(buf: &mut Bytes) -> Option<Self> {
+        let tag = buf.get_u8();
+        match tag {
+            0x1 => {
+                let addr = SocksAddr::decode_sync(buf)?;
+                Some(SQReq::SQConnect(addr))
+            }
+            0x2 => {
+                let addr = SocksAddr::decode_sync(buf)?;
+                Some(SQReq::SQBind(addr))
+            }
+            0x3 => {
+                let addr = SocksAddr::decode_sync(buf)?;
+                Some(SQReq::SQAssociatOverDatagram(addr))
+            }
+            0x4 => {
+                let addr = SocksAddr::decode_sync(buf)?;
+                Some(SQReq::SQAssociatOverStream(addr))
+            }
+            0x5 => {
+                if buf.remaining() < SUNNY_QUIC_AUTH_LEN {
+                    return None;
+                }
+                let mut cred = [0u8; SUNNY_QUIC_AUTH_LEN];
+                buf.copy_to_slice(&mut cred);
+                Some(SQReq::SQAuthenticate(Arc::new(cred)))
+            }
+            _ => None,
+        }
+    }
+}
+
+impl SEncodeSync for SQUdpControlHeader {
+    fn encode_sync(&self, buf: &mut BytesMut) {
+        self.dst.encode_sync(buf);
+        buf.put_u16(self.id);
+    }
+}
+
+impl SDecodeSync for SQUdpControlHeader {
+    fn decode_sync(buf: &mut Bytes) -> Option<Self> {
+        let dst = SocksAddr::decode_sync(buf)?;
+        let id = buf.get_u16();
+        Some(SQUdpControlHeader { dst, id })
+    }
+}
+
+impl SEncodeSync for SQPacketStreamHeader {
+    fn encode_sync(&self, buf: &mut BytesMut) {
+        buf.put_u16(self.id);
+        buf.put_u16(self.len);
+    }
+}
+
+impl SDecodeSync for SQPacketStreamHeader {
+    fn decode_sync(buf: &mut Bytes) -> Option<Self> {
+        let id = buf.get_u16();
+        let len = buf.get_u16();
+        Some(SQPacketStreamHeader { id, len })
+    }
+}
+
+impl SEncodeSync for SQPacketDatagramHeader {
+    fn encode_sync(&self, buf: &mut BytesMut) {
+        buf.put_u16(self.id);
+    }
+}
+
+impl SDecodeSync for SQPacketDatagramHeader {
+    fn decode_sync(buf: &mut Bytes) -> Option<Self> {
+        let id = buf.get_u16();
+        Some(SQPacketDatagramHeader { id })
+    }
 }
 
 #[tokio::test]

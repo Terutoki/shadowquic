@@ -307,3 +307,29 @@ impl<S: SDecodeSync> SDecodeSync for Arc<S> {
         S::decode_sync(buf).map(Arc::new)
     }
 }
+
+pub async fn encode_to_async<T: SEncodeSync + Send + Sync, W: AsyncWrite + Unpin + Send>(
+    val: &T,
+    writer: &mut W,
+) -> Result<(), SError> {
+    let mut buf = BytesMut::new();
+    val.encode_sync(&mut buf);
+    writer.write_all(&buf).await?;
+    Ok(())
+}
+
+pub async fn decode_to_async<T: SDecodeSync + Send, R: AsyncRead + Unpin + Send>(
+    reader: &mut R,
+) -> Result<T, SError> {
+    let mut buf = BytesMut::new();
+    let mut temp_buf = [0u8; 1024];
+    loop {
+        match reader.read(&mut temp_buf).await {
+            Ok(0) => break,
+            Ok(n) => buf.extend_from_slice(&temp_buf[..n]),
+            Err(e) => return Err(SError::Io(e)),
+        }
+    }
+    let mut bytes = buf.freeze();
+    T::decode_sync(&mut bytes).ok_or(SError::ProtocolViolation)
+}

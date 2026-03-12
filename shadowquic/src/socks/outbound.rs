@@ -25,7 +25,7 @@ use crate::{
     config::SocksClientCfg,
     error::SError,
     msgs::socks5::{AuthReply, AuthReq, CmdReq, SOCKS5_AUTH_METHOD_NONE, VarVec},
-    msgs::{SDecode, SEncode},
+    msgs::{SDecode, SEncode, encode_to_async},
 };
 
 #[derive(Debug, Clone)]
@@ -81,7 +81,7 @@ impl SocksClient {
             },
         };
 
-        auth.encode(&mut tcp).await?;
+        encode_to_async(&auth, &mut tcp).await?;
         let rep = AuthReply::decode(&mut tcp).await?;
         if rep.version != SOCKS5_VERSION {
             return Err(SError::SocksError("version not supported".into()));
@@ -108,7 +108,7 @@ impl SocksClient {
                         .to_vec(),
                 },
             };
-            auth.encode(&mut tcp).await?;
+            encode_to_async(&auth, &mut tcp).await?;
             let rep = PasswordAuthReply::decode(&mut tcp).await?;
             if rep.status != SOCKS5_REPLY_SUCCEEDED {
                 return Err(SError::SocksError("authenticate failed".into()));
@@ -128,7 +128,7 @@ impl SocksClient {
             rsv: SOCKS5_RESERVE,
             dst: tcp_session.dst,
         };
-        socksreq.encode(&mut tcp).await?;
+        encode_to_async(&socksreq, &mut tcp).await?;
         let _rep = CmdReply::decode(&mut tcp).await?;
         tracing::trace!("socks tcp connection established");
 
@@ -158,7 +158,7 @@ impl SocksClient {
             rsv: SOCKS5_RESERVE,
             dst: udp_session.bind_addr.clone(),
         };
-        socksreq.encode(&mut tcp).await?;
+        encode_to_async(&socksreq, &mut tcp).await?;
         let rep = CmdReply::decode(&mut tcp).await?;
         tracing::trace!("socks udp association established");
 

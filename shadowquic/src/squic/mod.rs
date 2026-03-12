@@ -6,6 +6,7 @@ use std::{
     time::Duration,
 };
 
+use bytes::BytesMut;
 use rustc_hash::{FxHashMap, FxBuildHasher};
 use tokio::{
     io::{AsyncReadExt, AsyncWrite, AsyncWriteExt},
@@ -27,7 +28,7 @@ use crate::{
     error::{SError, SResult},
     msgs::squic::SunnyCredential,
     msgs::{
-        SDecode, SEncode,
+        decode_to_async, encode_to_async, SDecode, SDecodeSync, SEncode, SEncodeSync,
         socks5::SocksAddr,
         squic::{SQPacketDatagramHeader, SQReq, SQUdpControlHeader},
     },
@@ -66,7 +67,7 @@ pub(crate) async fn auth_sunny<T: QuicConnection>(
 ) -> SResult<()> {
     if conn.authed.get().is_none() {
         let (mut send, _recv, _id) = conn.open_bi().await?;
-        SQReq::SQAuthenticate(user_hash).encode(&mut send).await?;
+        encode_to_async(&SQReq::SQAuthenticate(user_hash), &mut send).await?;
         debug!("authentication request sent");
         conn.authed.set(true).expect("repeated authentication");
     }
@@ -293,7 +294,7 @@ pub async fn handle_udp_send<C: QuicConnection>(
 
     // Pre-allocated buffers to avoid per-packet allocation
     let mut datagram_buf = fast_alloc_large();
-    let mut header_buf = Vec::with_capacity(64);
+    let mut header_buf = BytesMut::with_capacity(64);
     // Stack buffer for small packets (avoid heap allocation)
     let mut stack_buf = [0u8; 256];
 
@@ -310,8 +311,7 @@ pub async fn handle_udp_send<C: QuicConnection>(
                 dst: dst.clone(),
                 id,
             }
-            .encode(&mut header_buf)
-            .await?;
+            .encode_sync(&mut header_buf);
             send.write_all(&header_buf).await?;
         }
 
@@ -327,10 +327,9 @@ pub async fn handle_udp_send<C: QuicConnection>(
             header_buf.clear();
             if is_new {
                 SQPacketDatagramHeader { id }
-                    .encode(&mut header_buf)
-                    .await?;
+                    .encode_sync(&mut header_buf);
             }
-            (bytes.len() as u16).encode(&mut header_buf).await?;
+            (bytes.len() as u16).encode_sync(&mut header_buf);
 
             // Use stack buffer for small packets
             let combined_len = header_buf.len() + bytes.len();
@@ -349,8 +348,7 @@ pub async fn handle_udp_send<C: QuicConnection>(
             // Datagram path - ZERO-COPY: use chained slices
             header_buf.clear();
             SQPacketDatagramHeader { id }
-                .encode(&mut header_buf)
-                .await?;
+                .encode_sync(&mut header_buf);
 
             // For datagram, we need to combine. Use reserve_exact to avoid reallocation
             let total_len = header_buf.len() + bytes.len();

@@ -1,7 +1,7 @@
 use std::{io::Cursor, net::SocketAddr, sync::Arc};
 
 use async_trait::async_trait;
-use bytes::{BufMut, Bytes};
+use bytes::{BufMut, Bytes, BytesMut};
 use tokio::{net::UdpSocket, sync::OnceCell};
 use tracing::warn;
 
@@ -9,10 +9,11 @@ use crate::{
     UdpRecv, UdpSend,
     error::SError,
     msgs::socks5::{self, SocksAddr, UdpReqHeader},
+    msgs::encode_to_async,
     utils::memory_pool::fast_alloc,
 };
 
-use crate::msgs::{SDecode, SEncode};
+use crate::msgs::{SDecode, SEncode, SEncodeSync};
 pub mod inbound;
 pub mod outbound;
 
@@ -52,8 +53,8 @@ impl UdpSend for UdpSocksWrap {
             frag: 0,
             dst: addr,
         };
-        let mut header = Vec::with_capacity(64);
-        reply.encode(&mut header).await?;
+        let mut header = BytesMut::with_capacity(64);
+        reply.encode_sync(&mut header);
 
         // Use fast allocator
         let total_size = header.len() + buf.len();

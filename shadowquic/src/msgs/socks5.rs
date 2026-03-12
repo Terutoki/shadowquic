@@ -4,7 +4,7 @@ use std::{
     vec,
 };
 
-use bytes::{Buf, BufMut, Bytes};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 use shadowquic_macros::{SDecode, SEncode};
 
 use super::{SDecode, SEncode, SDecodeSync, SEncodeSync};
@@ -56,10 +56,46 @@ pub struct PasswordAuthReq {
     pub password: VarVec,
 }
 
+impl SEncodeSync for PasswordAuthReq {
+    fn encode_sync(&self, buf: &mut BytesMut) {
+        buf.put_u8(self.version);
+        self.username.encode_sync(buf);
+        self.password.encode_sync(buf);
+    }
+}
+
+impl SDecodeSync for PasswordAuthReq {
+    fn decode_sync(buf: &mut Bytes) -> Option<Self> {
+        let version = buf.get_u8();
+        let username = VarVec::decode_sync(buf)?;
+        let password = VarVec::decode_sync(buf)?;
+        Some(PasswordAuthReq {
+            version,
+            username,
+            password,
+        })
+    }
+}
+
 #[derive(Clone, Debug, SDecode, SEncode)]
 pub struct PasswordAuthReply {
     pub version: u8,
     pub status: u8,
+}
+
+impl SEncodeSync for PasswordAuthReply {
+    fn encode_sync(&self, buf: &mut BytesMut) {
+        buf.put_u8(self.version);
+        buf.put_u8(self.status);
+    }
+}
+
+impl SDecodeSync for PasswordAuthReply {
+    fn decode_sync(buf: &mut Bytes) -> Option<Self> {
+        let version = buf.get_u8();
+        let status = buf.get_u8();
+        Some(PasswordAuthReply { version, status })
+    }
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
@@ -171,7 +207,8 @@ impl SDecodeSync for VarVec {
         if buf.remaining() < len {
             return None;
         }
-        let contents = buf.copy_to_bytes(len).to_vec();
+        let mut contents = vec![0u8; len];
+        buf.copy_to_slice(&mut contents);
         Some(VarVec { len: len as u8, contents })
     }
 }
@@ -286,6 +323,23 @@ pub struct UdpReqHeader {
     pub dst: SocksAddr,
 }
 
+impl SEncodeSync for UdpReqHeader {
+    fn encode_sync(&self, buf: &mut BytesMut) {
+        buf.put_u16(self.rsv);
+        buf.put_u8(self.frag);
+        self.dst.encode_sync(buf);
+    }
+}
+
+impl SDecodeSync for UdpReqHeader {
+    fn decode_sync(buf: &mut Bytes) -> Option<Self> {
+        let rsv = buf.get_u16();
+        let frag = buf.get_u8();
+        let dst = SocksAddr::decode_sync(buf)?;
+        Some(UdpReqHeader { rsv, frag, dst })
+    }
+}
+
 #[async_trait::async_trait]
 impl SDecode for u8 {
     async fn decode<T: AsyncRead + Unpin + Send>(s: &mut T) -> Result<Self, SError> {
@@ -319,5 +373,135 @@ impl SEncode for u16 {
     async fn encode<T: AsyncWrite + Unpin + Send>(&self, s: &mut T) -> Result<(), SError> {
         s.write_u16(*self).await?;
         Ok(())
+    }
+}
+
+impl SEncodeSync for SocksAddr {
+    fn encode_sync(&self, buf: &mut bytes::BytesMut) {
+        self.addr.encode_sync(buf);
+        buf.put_u16(self.port);
+    }
+}
+
+impl SDecodeSync for SocksAddr {
+    fn decode_sync(buf: &mut Bytes) -> Option<Self> {
+        let addr = AddrOrDomain::decode_sync(buf)?;
+        let port = buf.get_u16();
+        Some(SocksAddr { addr, port })
+    }
+}
+
+impl SEncodeSync for AddrOrDomain {
+    fn encode_sync(&self, buf: &mut bytes::BytesMut) {
+        match self {
+            AddrOrDomain::V4(v) => {
+                buf.put_u8(SOCKS5_ADDR_TYPE_IPV4);
+                buf.extend_from_slice(v);
+            }
+            AddrOrDomain::V6(v) => {
+                buf.put_u8(SOCKS5_ADDR_TYPE_IPV6);
+                buf.extend_from_slice(v);
+            }
+            AddrOrDomain::Domain(v) => {
+                buf.put_u8(SOCKS5_ADDR_TYPE_DOMAIN_NAME);
+                v.encode_sync(buf);
+            }
+        }
+    }
+}
+
+impl SDecodeSync for AddrOrDomain {
+    fn decode_sync(buf: &mut Bytes) -> Option<Self> {
+        let typ = buf.get_u8();
+        match typ {
+            SOCKS5_ADDR_TYPE_IPV4 => {
+                let mut v = [0u8; 4];
+                buf.copy_to_slice(&mut v);
+                Some(AddrOrDomain::V4(v))
+            }
+            SOCKS5_ADDR_TYPE_IPV6 => {
+                let mut v = [0u8; 16];
+                buf.copy_to_slice(&mut v);
+                Some(AddrOrDomain::V6(v))
+            }
+            SOCKS5_ADDR_TYPE_DOMAIN_NAME => {
+                let v = VarVec::decode_sync(buf)?;
+                Some(AddrOrDomain::Domain(v))
+            }
+            _ => None,
+        }
+    }
+}
+
+impl SEncodeSync for AuthReq {
+    fn encode_sync(&self, buf: &mut bytes::BytesMut) {
+        buf.put_u8(self.version);
+        self.methods.encode_sync(buf);
+    }
+}
+
+impl SDecodeSync for AuthReq {
+    fn decode_sync(buf: &mut Bytes) -> Option<Self> {
+        let version = buf.get_u8();
+        let methods = VarVec::decode_sync(buf)?;
+        Some(AuthReq { version, methods })
+    }
+}
+
+impl SEncodeSync for AuthReply {
+    fn encode_sync(&self, buf: &mut bytes::BytesMut) {
+        buf.put_u8(self.version);
+        buf.put_u8(self.method);
+    }
+}
+
+impl SDecodeSync for AuthReply {
+    fn decode_sync(buf: &mut Bytes) -> Option<Self> {
+        let version = buf.get_u8();
+        let method = buf.get_u8();
+        Some(AuthReply { version, method })
+    }
+}
+
+impl SEncodeSync for CmdReq {
+    fn encode_sync(&self, buf: &mut bytes::BytesMut) {
+        buf.put_u8(self.version);
+        buf.put_u8(self.cmd);
+        buf.put_u8(self.rsv);
+        self.dst.encode_sync(buf);
+    }
+}
+
+impl SDecodeSync for CmdReq {
+    fn decode_sync(buf: &mut Bytes) -> Option<Self> {
+        let version = buf.get_u8();
+        let cmd = buf.get_u8();
+        let rsv = buf.get_u8();
+        let dst = SocksAddr::decode_sync(buf)?;
+        Some(CmdReq { version, cmd, rsv, dst })
+    }
+}
+
+impl SEncodeSync for CmdReply {
+    fn encode_sync(&self, buf: &mut bytes::BytesMut) {
+        buf.put_u8(self.version);
+        buf.put_u8(self.rep);
+        buf.put_u8(self.rsv);
+        self.bind_addr.encode_sync(buf);
+    }
+}
+
+impl SDecodeSync for CmdReply {
+    fn decode_sync(buf: &mut Bytes) -> Option<Self> {
+        let version = buf.get_u8();
+        let rep = buf.get_u8();
+        let rsv = buf.get_u8();
+        let bind_addr = SocksAddr::decode_sync(buf)?;
+        Some(CmdReply {
+            version,
+            rep,
+            rsv,
+            bind_addr,
+        })
     }
 }
