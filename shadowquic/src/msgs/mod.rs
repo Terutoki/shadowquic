@@ -131,11 +131,30 @@ impl<T: SEncodeSync> SEncodeSync for LengthPrefixed<T> {
         let body_len = buf.len() - body_start;
         let varint = VarInt::new(body_len as u32).expect("message too large");
         let encoded_len = varint.encoded_len();
-        let mut result = BytesMut::with_capacity(encoded_len + body_len);
-        varint.encode_varint_to(&mut result);
-        result.extend_from_slice(&buf[body_start..]);
-        buf.truncate(body_start);
-        buf.extend_from_slice(&result);
+
+        buf.reserve(encoded_len);
+        unsafe {
+            let ptr = buf.as_mut_ptr().add(body_start);
+            std::ptr::copy(ptr, ptr.add(encoded_len), body_len);
+            let new_len = buf.len() + encoded_len;
+            buf.set_len(new_len);
+
+            let val = varint.0;
+            let slice = &mut buf.as_mut()[body_start..body_start + encoded_len];
+            if val < 64 {
+                slice[0] = val as u8;
+            } else if val < 16384 {
+                let v = (val | 0x4000) as u16;
+                slice[0] = (v >> 8) as u8;
+                slice[1] = (v & 0xff) as u8;
+            } else {
+                let v = val | 0x80000000;
+                slice[0] = (v >> 24) as u8;
+                slice[1] = ((v >> 16) & 0xff) as u8;
+                slice[2] = ((v >> 8) & 0xff) as u8;
+                slice[3] = (v & 0xff) as u8;
+            }
+        }
     }
 }
 

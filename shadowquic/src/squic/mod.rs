@@ -1,5 +1,5 @@
 use std::{
-    collections::hash_map::{self, HashMap, Entry},
+    collections::hash_map::{self, Entry, HashMap},
     mem::replace,
     ops::Deref,
     sync::Arc,
@@ -7,7 +7,7 @@ use std::{
 };
 
 use bytes::BytesMut;
-use rustc_hash::{FxHashMap, FxBuildHasher};
+use rustc_hash::{FxBuildHasher, FxHashMap};
 use tokio::{
     io::{AsyncReadExt, AsyncWrite, AsyncWriteExt},
     sync::{
@@ -28,7 +28,7 @@ use crate::{
     error::{SError, SResult},
     msgs::squic::SunnyCredential,
     msgs::{
-        decode_to_async, encode_to_async, SDecode, SDecodeSync, SEncode, SEncodeSync,
+        SDecode, SDecodeSync, SEncode, SEncodeSync, decode_to_async, encode_to_async,
         socks5::SocksAddr,
         squic::{SQPacketDatagramHeader, SQReq, SQUdpControlHeader},
     },
@@ -97,7 +97,10 @@ pub(crate) struct IDStore<T = (AnyUdpSend, SocksAddr)> {
 impl<T> Default for IDStore<T> {
     fn default() -> Self {
         Self {
-            inner: Arc::new(RwLock::new(HashMap::with_capacity_and_hasher(64, FxBuildHasher))),
+            inner: Arc::new(RwLock::new(HashMap::with_capacity_and_hasher(
+                64,
+                FxBuildHasher,
+            ))),
         }
     }
 }
@@ -326,8 +329,7 @@ pub async fn handle_udp_send<C: QuicConnection>(
             };
             header_buf.clear();
             if is_new {
-                SQPacketDatagramHeader { id }
-                    .encode_sync(&mut header_buf);
+                SQPacketDatagramHeader { id }.encode_sync(&mut header_buf);
             }
             (bytes.len() as u16).encode_sync(&mut header_buf);
 
@@ -347,8 +349,7 @@ pub async fn handle_udp_send<C: QuicConnection>(
         } else {
             // Datagram path - ZERO-COPY: use chained slices
             header_buf.clear();
-            SQPacketDatagramHeader { id }
-                .encode_sync(&mut header_buf);
+            SQPacketDatagramHeader { id }.encode_sync(&mut header_buf);
 
             // For datagram, we need to combine. Use reserve_exact to avoid reallocation
             let total_len = header_buf.len() + bytes.len();

@@ -5,7 +5,7 @@ use bytes::{Buf, BufMut, Bytes, BytesMut};
 use crate::error::SError;
 
 use super::socks5::SocksAddr;
-use super::{SDecode, SEncode, SDecodeSync, SEncodeSync};
+use super::{SDecode, SDecodeSync, SEncode, SEncodeSync};
 use shadowquic_macros::{SDecode, SEncode};
 
 pub static SUNNY_QUIC_AUTH_LEN: usize = 64;

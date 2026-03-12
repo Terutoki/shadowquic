@@ -7,7 +7,7 @@ use std::{
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use shadowquic_macros::{SDecode, SEncode};
 
-use super::{SDecode, SEncode, SDecodeSync, SEncodeSync};
+use super::{SDecode, SDecodeSync, SEncode, SEncodeSync};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 #[rustfmt::skip]
@@ -101,7 +101,7 @@ impl SDecodeSync for PasswordAuthReply {
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct VarVec {
     pub len: u8,
-    pub contents: Vec<u8>,
+    pub contents: Bytes,
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
@@ -159,7 +159,10 @@ impl SDecodeSync for VarBytes {
             return None;
         }
         let contents = buf.copy_to_bytes(len);
-        Some(VarBytes { len: len as u8, contents })
+        Some(VarBytes {
+            len: len as u8,
+            contents,
+        })
     }
 }
 
@@ -167,7 +170,7 @@ impl From<Vec<u8>> for VarVec {
     fn from(vec: Vec<u8>) -> Self {
         VarVec {
             len: vec.len() as u8,
-            contents: vec,
+            contents: vec.into(),
         }
     }
 }
@@ -185,11 +188,13 @@ impl SDecode for VarVec {
     async fn decode<T: AsyncRead + Unpin + Send>(s: &mut T) -> Result<Self, SError> {
         let mut buf = [0u8; 1];
         s.read_exact(&mut buf).await?;
-        let mut buf2 = vec![0u8; buf[0] as usize];
-        s.read_exact(&mut buf2).await?;
+        let len = buf[0] as usize;
+        let mut contents = BytesMut::with_capacity(len);
+        contents.resize(len, 0);
+        s.read_exact(&mut contents[..len]).await?;
         Ok(Self {
             len: buf[0],
-            contents: buf2,
+            contents: contents.freeze(),
         })
     }
 }
@@ -207,9 +212,11 @@ impl SDecodeSync for VarVec {
         if buf.remaining() < len {
             return None;
         }
-        let mut contents = vec![0u8; len];
-        buf.copy_to_slice(&mut contents);
-        Some(VarVec { len: len as u8, contents })
+        let contents = buf.copy_to_bytes(len);
+        Some(VarVec {
+            len: len as u8,
+            contents,
+        })
     }
 }
 
@@ -237,7 +244,7 @@ impl SocksAddr {
         SocksAddr {
             addr: AddrOrDomain::Domain(VarVec {
                 len: name.len() as u8,
-                contents: name.into_bytes(),
+                contents: Bytes::from(name),
             }),
             port,
         }
@@ -267,7 +274,7 @@ impl fmt::Display for AddrOrDomain {
             AddrOrDomain::Domain(var_vec) => write!(
                 f,
                 "{}",
-                String::from_utf8(var_vec.contents.clone()).map_err(|_| fmt::Error)?
+                String::from_utf8(var_vec.contents.to_vec()).map_err(|_| fmt::Error)?
             )?,
         }
         Ok(())
@@ -478,7 +485,12 @@ impl SDecodeSync for CmdReq {
         let cmd = buf.get_u8();
         let rsv = buf.get_u8();
         let dst = SocksAddr::decode_sync(buf)?;
-        Some(CmdReq { version, cmd, rsv, dst })
+        Some(CmdReq {
+            version,
+            cmd,
+            rsv,
+            dst,
+        })
     }
 }
 

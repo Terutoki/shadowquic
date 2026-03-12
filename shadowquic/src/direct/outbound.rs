@@ -5,7 +5,7 @@ use std::{
 
 use rustc_hash::FxHashMap;
 
-use bytes::BytesMut;
+use bytes::{Bytes, BytesMut};
 use tokio::{
     net::{TcpStream, lookup_host},
     sync::Mutex,
@@ -70,7 +70,7 @@ impl Outbound for DirectOut {
 }
 
 #[derive(Default, Clone)]
-struct DnsResolve(Arc<Mutex<FxHashMap<Vec<u8>, SocketAddr>>>);
+struct DnsResolve(Arc<Mutex<FxHashMap<bytes::Bytes, SocketAddr>>>);
 impl DnsResolve {
     async fn resolve(
         &self,
@@ -78,7 +78,7 @@ impl DnsResolve {
         strategy: &DnsStrategy,
     ) -> Result<SocketAddr, SError> {
         if let AddrOrDomain::Domain(x) = &socks.addr {
-            if let Some(v) = self.0.lock().await.get(&x.contents) {
+            if let Some(v) = self.0.lock().await.get(&*x.contents) {
                 Ok(*v)
             } else {
                 let s = resolve(&socks, strategy).await?;
@@ -114,7 +114,7 @@ async fn resolve(socks: &SocksAddr, strategy: &DnsStrategy) -> Result<SocketAddr
         }
         crate::msgs::socks5::AddrOrDomain::Domain(var_vec) => {
             let ip_list = lookup_host((
-                String::from_utf8(var_vec.contents)
+                String::from_utf8(var_vec.contents.to_vec())
                     .map_err(|_| SError::DomainResolveFailed(socks.to_string()))?,
                 socks.port,
             ))

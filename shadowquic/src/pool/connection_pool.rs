@@ -5,8 +5,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
-use spin::RwLock;
 use rustc_hash::FxHasher;
+use spin::RwLock;
 
 use crate::error::SError;
 use crate::quic::{QuicConnection, QuicErrorRepr};

@@ -8,7 +8,7 @@ use crate::msgs::socks5::{
     SOCKS5_AUTH_METHOD_NONE, SOCKS5_AUTH_METHOD_PASSWORD, SOCKS5_CMD_TCP_BIND,
     SOCKS5_CMD_TCP_CONNECT, SOCKS5_CMD_UDP_ASSOCIATE, SOCKS5_REPLY_SUCCEEDED, SOCKS5_VERSION,
 };
-use crate::msgs::{encode_to_async, SDecode, SEncode};
+use crate::msgs::{SDecode, SEncode, encode_to_async};
 use crate::pool::FastSessionType;
 use crate::pool::fast_create_session;
 use crate::utils::dual_socket::to_ipv4_mapped;
@@ -89,9 +89,9 @@ impl SocksServer {
         }
         let auth = PasswordAuthReq::decode(&mut stream).await?;
         if !self.users.contains(&AuthUser {
-            username: String::from_utf8(auth.username.contents)
+            username: String::from_utf8(auth.username.contents.to_vec())
                 .map_err(|_| SError::SocksError("invalid UTF-8 in username".to_string()))?,
-            password: String::from_utf8(auth.password.contents)
+            password: String::from_utf8(auth.password.contents.to_vec())
                 .map_err(|_| SError::SocksError("invalid UTF-8 in password".to_string()))?,
         }) {
             return Err(SError::SocksError("authentication failed".to_string()));

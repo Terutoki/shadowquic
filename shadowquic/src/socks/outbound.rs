@@ -1,6 +1,8 @@
 use std::net::ToSocketAddrs;
 use std::sync::Arc;
 
+use bytes::Bytes;
+
 use crate::{
     TcpSession, UdpRecv, UdpSend, UdpSession,
     msgs::socks5::{
@@ -77,7 +79,7 @@ impl SocksClient {
             version: SOCKS5_VERSION,
             methods: VarVec {
                 len: 1,
-                contents: vec![method],
+                contents: bytes::BytesMut::from(&[method][..]).freeze(),
             },
         };
 
@@ -96,16 +98,16 @@ impl SocksClient {
                 version: 0x01, // This is password auth version not socks version
                 username: VarVec {
                     len: username.len() as u8,
-                    contents: username.as_bytes().to_vec(),
+                    contents: Bytes::from(username.clone()),
                 },
                 password: VarVec {
                     len: self.password.as_ref().unwrap().len() as u8,
-                    contents: self
-                        .password
-                        .as_ref()
-                        .ok_or(SError::SocksError("password not provided".into()))?
-                        .as_bytes()
-                        .to_vec(),
+                    contents: Bytes::from(
+                        self.password
+                            .as_ref()
+                            .ok_or(SError::SocksError("password not provided".into()))?
+                            .clone(),
+                    ),
                 },
             };
             encode_to_async(&auth, &mut tcp).await?;

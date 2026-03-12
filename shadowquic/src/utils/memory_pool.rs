@@ -129,7 +129,7 @@ impl BytesPool {
                 *buf = BytesMut::with_capacity(SMALL_BUFFER_SIZE);
             }
             buf.clear();
-            buf.clone()
+            std::mem::take(buf)
         }
     }
 
@@ -143,7 +143,7 @@ impl BytesPool {
                 *buf = BytesMut::with_capacity(MEDIUM_BUFFER_SIZE);
             }
             buf.clear();
-            buf.clone()
+            std::mem::take(buf)
         }
     }
 
@@ -157,7 +157,7 @@ impl BytesPool {
                 *buf = BytesMut::with_capacity(LARGE_BUFFER_SIZE);
             }
             buf.clear();
-            buf.clone()
+            std::mem::take(buf)
         }
     }
 

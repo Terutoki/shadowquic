@@ -8,8 +8,8 @@ use tracing::warn;
 use crate::{
     UdpRecv, UdpSend,
     error::SError,
-    msgs::socks5::{self, SocksAddr, UdpReqHeader},
     msgs::encode_to_async,
+    msgs::socks5::{self, SocksAddr, UdpReqHeader},
     utils::memory_pool::fast_alloc,
 };
 
