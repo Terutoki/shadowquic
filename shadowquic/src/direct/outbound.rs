@@ -8,7 +8,7 @@ use rustc_hash::FxHashMap;
 use bytes::{Bytes, BytesMut};
 use tokio::{
     net::{TcpStream, lookup_host},
-    sync::Mutex,
+    sync::RwLock,
 };
 use tracing::{Instrument, error, trace, trace_span};
 
@@ -70,7 +70,7 @@ impl Outbound for DirectOut {
 }
 
 #[derive(Default, Clone)]
-struct DnsResolve(Arc<Mutex<FxHashMap<bytes::Bytes, SocketAddr>>>);
+struct DnsResolve(Arc<RwLock<FxHashMap<bytes::Bytes, SocketAddr>>>);
 impl DnsResolve {
     async fn resolve(
         &self,
@@ -78,19 +78,22 @@ impl DnsResolve {
         strategy: &DnsStrategy,
     ) -> Result<SocketAddr, SError> {
         if let AddrOrDomain::Domain(x) = &socks.addr {
-            if let Some(v) = self.0.lock().await.get(&*x.contents) {
-                Ok(*v)
-            } else {
-                let s = resolve(&socks, strategy).await?;
-                self.0.lock().await.insert(x.contents.clone(), s);
-                Ok(s)
+            {
+                let cache = self.0.read().await;
+                if let Some(v) = cache.get(&*x.contents) {
+                    return Ok(*v);
+                }
             }
+            let s = resolve(&socks, strategy).await?;
+            self.0.write().await.insert(x.contents.clone(), s);
+            Ok(s)
         } else {
             Ok(resolve(&socks, strategy).await?)
         }
     }
     async fn inv_resolve(&self, addr: &SocketAddr) -> SocksAddr {
-        if let Some(add) = self.0.lock().await.iter().find(|x| x.1 == addr) {
+        let cache = self.0.read().await;
+        if let Some(add) = cache.iter().find(|x| x.1 == addr) {
             SocksAddr {
                 addr: AddrOrDomain::Domain(VarVec {
                     len: add.0.len() as u8,
@@ -114,8 +117,7 @@ async fn resolve(socks: &SocksAddr, strategy: &DnsStrategy) -> Result<SocketAddr
         }
         crate::msgs::socks5::AddrOrDomain::Domain(var_vec) => {
             let ip_list = lookup_host((
-                String::from_utf8(var_vec.contents.to_vec())
-                    .map_err(|_| SError::DomainResolveFailed(socks.to_string()))?,
+                String::from_utf8_lossy(&var_vec.contents).into_owned(),
                 socks.port,
             ))
             .await?;

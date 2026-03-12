@@ -89,10 +89,8 @@ impl SocksServer {
         }
         let auth = PasswordAuthReq::decode(&mut stream).await?;
         if !self.users.contains(&AuthUser {
-            username: String::from_utf8(auth.username.contents.to_vec())
-                .map_err(|_| SError::SocksError("invalid UTF-8 in username".to_string()))?,
-            password: String::from_utf8(auth.password.contents.to_vec())
-                .map_err(|_| SError::SocksError("invalid UTF-8 in password".to_string()))?,
+            username: String::from_utf8_lossy(&auth.username.contents).into_owned(),
+            password: String::from_utf8_lossy(&auth.password.contents).into_owned(),
         }) {
             return Err(SError::SocksError("authentication failed".to_string()));
         }

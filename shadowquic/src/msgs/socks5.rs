@@ -269,15 +269,12 @@ pub enum AddrOrDomain {
 impl fmt::Display for AddrOrDomain {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            AddrOrDomain::V4(x) => write!(f, "{}", IpAddr::from(*x))?,
-            AddrOrDomain::V6(x) => write!(f, "{}", IpAddr::from(*x))?,
-            AddrOrDomain::Domain(var_vec) => write!(
-                f,
-                "{}",
-                String::from_utf8(var_vec.contents.to_vec()).map_err(|_| fmt::Error)?
-            )?,
+            AddrOrDomain::V4(x) => write!(f, "{}", IpAddr::from(*x)),
+            AddrOrDomain::V6(x) => write!(f, "{}", IpAddr::from(*x)),
+            AddrOrDomain::Domain(var_vec) => {
+                write!(f, "{}", String::from_utf8_lossy(&var_vec.contents))
+            }
         }
-        Ok(())
     }
 }
 
