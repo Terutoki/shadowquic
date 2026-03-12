@@ -4,9 +4,10 @@ use std::{
     vec,
 };
 
+use bytes::{Buf, BufMut, Bytes};
 use shadowquic_macros::{SDecode, SEncode};
 
-use super::{SDecode, SEncode};
+use super::{SDecode, SEncode, SDecodeSync, SEncodeSync};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 #[rustfmt::skip]
@@ -67,6 +68,65 @@ pub struct VarVec {
     pub contents: Vec<u8>,
 }
 
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+pub struct VarBytes {
+    pub len: u8,
+    pub contents: Bytes,
+}
+
+impl VarBytes {
+    pub fn new(contents: Bytes) -> Option<Self> {
+        let len = contents.len();
+        if len > 255 {
+            return None;
+        }
+        Some(VarBytes {
+            len: len as u8,
+            contents,
+        })
+    }
+
+    pub fn as_slice(&self) -> &[u8] {
+        &self.contents[..self.len as usize]
+    }
+}
+
+impl From<Vec<u8>> for VarBytes {
+    fn from(vec: Vec<u8>) -> Self {
+        let len = vec.len() as u8;
+        VarBytes {
+            len,
+            contents: vec.into(),
+        }
+    }
+}
+
+impl From<String> for VarBytes {
+    fn from(s: String) -> Self {
+        let contents = Bytes::from(s);
+        let len = contents.len() as u8;
+        VarBytes { len, contents }
+    }
+}
+
+impl SEncodeSync for VarBytes {
+    fn encode_sync(&self, buf: &mut bytes::BytesMut) {
+        buf.put_u8(self.len);
+        buf.extend_from_slice(self.as_slice());
+    }
+}
+
+impl SDecodeSync for VarBytes {
+    fn decode_sync(buf: &mut Bytes) -> Option<Self> {
+        let len = buf.get_u8() as usize;
+        if buf.remaining() < len {
+            return None;
+        }
+        let contents = buf.copy_to_bytes(len);
+        Some(VarBytes { len: len as u8, contents })
+    }
+}
+
 impl From<Vec<u8>> for VarVec {
     fn from(vec: Vec<u8>) -> Self {
         VarVec {
@@ -95,6 +155,24 @@ impl SDecode for VarVec {
             len: buf[0],
             contents: buf2,
         })
+    }
+}
+
+impl SEncodeSync for VarVec {
+    fn encode_sync(&self, buf: &mut bytes::BytesMut) {
+        buf.put_u8(self.len);
+        buf.extend_from_slice(&self.contents[..self.len as usize]);
+    }
+}
+
+impl SDecodeSync for VarVec {
+    fn decode_sync(buf: &mut Bytes) -> Option<Self> {
+        let len = buf.get_u8() as usize;
+        if buf.remaining() < len {
+            return None;
+        }
+        let contents = buf.copy_to_bytes(len).to_vec();
+        Some(VarVec { len: len as u8, contents })
     }
 }
 
