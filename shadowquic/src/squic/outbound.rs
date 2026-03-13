@@ -54,6 +54,10 @@ pub async fn handle_request<C: QuicConnection>(
                     };
                     Frame::Connect(req).encode(&mut send).await?;
                     trace!("tcp connect req header sent");
+                    
+                    // Read ConnectAck response before starting data transfer
+                    let ack = Frame::decode(&mut recv).await?;
+                    trace!("ConnectAck received: {:?}", ack);
                 }
 
                 // 直接开始数据传输，无需等待确认

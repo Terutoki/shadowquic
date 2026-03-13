@@ -145,6 +145,15 @@ impl<C: QuicConnection> SQServerConn<C> {
                                 req.dst
                             );
                             
+                            // Send ConnectAck response
+                            use crate::msgs::frame::ConnectAck;
+                            let ack = ConnectAck {
+                                status: 0,
+                                bind_addr: req.dst.clone(),
+                                extensions: vec![],
+                            };
+                            Frame::ConnectAck(ack).encode(&mut send).await?;
+                            
                             // 直接开始数据转发，无需发送确认
                             let tcp: TcpSession = TcpSession {
                                 stream: Box::new(Unsplit { s: send, r: recv }),
@@ -181,6 +190,15 @@ impl<C: QuicConnection> SQServerConn<C> {
                     inner.remote_address(),
                     req.dst
                 );
+                
+                // Send ConnectAck response
+                use crate::msgs::frame::ConnectAck;
+                let ack = ConnectAck {
+                    status: 0,
+                    bind_addr: req.dst.clone(),
+                    extensions: vec![],
+                };
+                Frame::ConnectAck(ack).encode(&mut send).await?;
                 
                 // 直接开始数据转发，无需发送确认
                 let tcp: TcpSession = TcpSession {
