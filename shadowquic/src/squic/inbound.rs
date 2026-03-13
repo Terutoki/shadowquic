@@ -106,6 +106,8 @@ impl<C: QuicConnection> SQServerConn<C> {
                         .send(ProxyRequest::Tcp(tcp))
                         .await
                         .map_err(|_| SError::OutboundUnavailable)?;
+                    
+                    // 注意：每个bistream只能处理一个TCP连接
                 } else {
                     tracing::error!("FastConnect authentication failed");
                     inner.close(263, &[]);
@@ -133,7 +135,7 @@ impl<C: QuicConnection> SQServerConn<C> {
                     
                     inner.authed.set(true).expect("repeated authentication!");
                     
-                    // 握手完成后，继续等待后续请求
+                    // 握手完成后，继续等待后续请求（支持多路复用）
                     let frame = Frame::decode(&mut recv).await?;
                     match frame {
                         Frame::Connect(req) => {
@@ -153,6 +155,12 @@ impl<C: QuicConnection> SQServerConn<C> {
                                 .send(ProxyRequest::Tcp(tcp))
                                 .await
                                 .map_err(|_| SError::OutboundUnavailable)?;
+                            
+                            // 注意：每个bistream只能处理一个TCP连接
+                            // 多路复用需要新建bistream
+                        }
+                        Frame::Fin => {
+                            trace!("client closed the connection");
                         }
                         _ => {
                             tracing::warn!("unexpected frame after handshake: {:?}", frame);
