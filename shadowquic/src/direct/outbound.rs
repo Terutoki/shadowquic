@@ -8,8 +8,8 @@ use rustc_hash::FxHashMap;
 use bytes::{Bytes, BytesMut};
 use tokio::{
     net::{TcpStream, lookup_host},
-    sync::RwLock,
 };
+use parking_lot::RwLock;
 use tracing::{Instrument, error, trace, trace_span};
 
 use crate::{
@@ -79,20 +79,20 @@ impl DnsResolve {
     ) -> Result<SocketAddr, SError> {
         if let AddrOrDomain::Domain(x) = &socks.addr {
             {
-                let cache = self.0.read().await;
+                let cache = self.0.read();
                 if let Some(v) = cache.get(&*x.contents) {
                     return Ok(*v);
                 }
             }
             let s = resolve(&socks, strategy).await?;
-            self.0.write().await.insert(x.contents.clone(), s);
+            self.0.write().insert(x.contents.clone(), s);
             Ok(s)
         } else {
             Ok(resolve(&socks, strategy).await?)
         }
     }
     async fn inv_resolve(&self, addr: &SocketAddr) -> SocksAddr {
-        let cache = self.0.read().await;
+        let cache = self.0.read();
         if let Some(add) = cache.iter().find(|x| x.1 == addr) {
             SocksAddr {
                 addr: AddrOrDomain::Domain(VarVec {

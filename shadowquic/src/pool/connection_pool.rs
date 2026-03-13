@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::time::{Duration, Instant};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use rustc_hash::FxHasher;
 use spin::RwLock;
@@ -80,17 +80,18 @@ impl Default for PoolStats {
 pub struct ConnectionState<C> {
     conn: RwLock<Option<C>>,
     in_use: AtomicBool,
-    last_used: RwLock<Instant>,
+    last_used: AtomicU64,
     _created_at: Instant,
     _remote_addr: SocketAddr,
 }
 
 impl<C> ConnectionState<C> {
     fn new(conn: C, remote_addr: SocketAddr) -> Self {
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64;
         Self {
             conn: RwLock::new(Some(conn)),
             in_use: AtomicBool::new(false),
-            last_used: RwLock::new(Instant::now()),
+            last_used: AtomicU64::new(now),
             _created_at: Instant::now(),
             _remote_addr: remote_addr,
         }
@@ -110,15 +111,17 @@ impl<C> ConnectionState<C> {
 
     #[inline]
     pub fn release(&self) {
-        *self.last_used.write() = Instant::now();
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64;
+        self.last_used.store(now, Ordering::Release);
         self.in_use.store(false, Ordering::Release);
     }
 
     pub fn is_expired(&self, config: &PoolConfig) -> bool {
-        let idle = *self.last_used.read();
+        let idle = self.last_used.load(Ordering::Acquire);
         let in_use = self.in_use.load(Ordering::Acquire);
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64;
 
-        !in_use && idle.elapsed() > config.idle_timeout
+        !in_use && (now - idle) > config.idle_timeout.as_millis() as u64
     }
 
     pub fn take_connection(&self) -> Option<C> {
@@ -203,7 +206,8 @@ impl<C: QuicConnection> ConnectionShard<C> {
             let connections = self.connections.read();
             if let Some(state) = connections.get(&addr) {
                 if state.try_acquire() {
-                    *state.last_used.write() = Instant::now();
+                    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64;
+                    state.last_used.store(now, Ordering::Release);
                     self.stats
                         .connection_acquires
                         .fetch_add(1, Ordering::Relaxed);
@@ -212,22 +216,7 @@ impl<C: QuicConnection> ConnectionShard<C> {
             }
         }
 
-        let mut connections = self.connections.write();
-
-        if let Some(state) = connections.get(&addr) {
-            if state.try_acquire() {
-                *state.last_used.write() = Instant::now();
-                return Ok(Arc::clone(state));
-            }
-        }
-
-        if connections.len() >= self.config.max_connections_per_shard {
-            self.cleanup_expired(&mut connections);
-            if connections.len() >= self.config.max_connections_per_shard {
-                return Err(SError::OutboundUnavailable);
-            }
-        }
-
+        // 先释放读锁，创建连接不持有锁
         let conn = tokio::time::timeout(self.config.connection_timeout, connect_fn())
             .await
             .map_err(|_| {
@@ -240,6 +229,25 @@ impl<C: QuicConnection> ConnectionShard<C> {
                 self.stats.connection_errors.fetch_add(1, Ordering::Relaxed);
                 SError::QuicError(QuicErrorRepr::QuicConnect(e.to_string()))
             })?;
+
+        // 连接创建完成，再次检查避免竞争
+        let mut connections = self.connections.write();
+
+        // 双重检查：连接可能在创建期间已被其他线程插入
+        if let Some(state) = connections.get(&addr) {
+            if state.try_acquire() {
+                let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64;
+                state.last_used.store(now, Ordering::Release);
+                return Ok(Arc::clone(state));
+            }
+        }
+
+        if connections.len() >= self.config.max_connections_per_shard {
+            self.cleanup_expired(&mut connections);
+            if connections.len() >= self.config.max_connections_per_shard {
+                return Err(SError::OutboundUnavailable);
+            }
+        }
 
         let state = Arc::new(ConnectionState::new(conn, addr));
         state.try_acquire();
