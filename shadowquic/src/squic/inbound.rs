@@ -109,6 +109,16 @@ impl<C: QuicConnection> SQServerConn<C> {
                                 inner.remote_address(),
                                 req.dst
                             );
+                            
+                            // Send ConnectAck response
+                            use crate::msgs::frame::ConnectAck;
+                            let ack = ConnectAck {
+                                status: 0, // success
+                                bind_addr: req.dst.clone(),
+                                extensions: vec![],
+                            };
+                            Frame::ConnectAck(ack).encode(&mut send).await?;
+                            
                             let tcp: TcpSession = TcpSession {
                                 stream: Box::new(Unsplit { s: send, r: recv }),
                                 dst: req.dst,
@@ -138,6 +148,16 @@ impl<C: QuicConnection> SQServerConn<C> {
                     inner.remote_address(),
                     req.dst
                 );
+                
+                // Send ConnectAck response
+                use crate::msgs::frame::ConnectAck;
+                let ack = ConnectAck {
+                    status: 0, // success
+                    bind_addr: req.dst.clone(),
+                    extensions: vec![],
+                };
+                Frame::ConnectAck(ack).encode(&mut send).await?;
+                
                 let tcp: TcpSession = TcpSession {
                     stream: Box::new(Unsplit { s: send, r: recv }),
                     dst: req.dst,
