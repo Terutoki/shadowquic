@@ -56,21 +56,13 @@ pub async fn handle_request<C: QuicConnection>(
                     Frame::Connect(req).encode(&mut send).await?;
                     trace!("tcp connect req header sent");
                     
-                    // 尝试非阻塞读取可能的ConnectAck并丢弃
-                    // 这不会增加RTT，因为Server可以立即发送数据
-                    // 如果Server发送了ConnectAck，它已经在buffer中
-                    use tokio::time::{timeout, Duration};
-                    match timeout(Duration::from_millis(10), Frame::decode(&mut recv)).await {
+                    // 尝试非阻塞读取并丢弃可能的ConnectAck
+                    // Server可能不发送ConnectAck，超时则忽略
+                    match timeout(Duration::from_millis(0), Frame::decode(&mut recv)).await {
                         Ok(Ok(Frame::ConnectAck(_))) => {
-                            trace!("ConnectAck received and discarded");
+                            trace!("ConnectAck discarded");
                         }
-                        Ok(Ok(_)) => {
-                            // 收到了其他Frame，记录警告
-                            trace!("unexpected frame type, continuing");
-                        }
-                        _ => {
-                            // 超时或错误，忽略继续
-                        }
+                        _ => {}
                     }
                 }
 
