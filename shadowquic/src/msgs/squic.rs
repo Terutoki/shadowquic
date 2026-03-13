@@ -9,6 +9,7 @@ use super::{SDecode, SDecodeSync, SEncode, SEncodeSync};
 use shadowquic_macros::{SDecode, SEncode};
 
 pub static SUNNY_QUIC_AUTH_LEN: usize = 64;
+#[deprecated = "Use [u8; 64] directly"]
 pub(crate) type SunnyCredential = Arc<[u8; SUNNY_QUIC_AUTH_LEN]>;
 
 #[derive(PartialEq)]

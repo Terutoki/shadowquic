@@ -10,17 +10,27 @@ mod socks5_addr_test;
 
 pub mod socks5;
 pub mod squic;
+pub mod frame;
+pub mod framed;
 
+pub use framed::Framed;
+
+pub use frame::VarInt;
+
+// 旧VarInt常量，标记为deprecated
+#[deprecated = "Use frame::VarInt instead"]
 pub const VARINT_MAX_SIZE: usize = 4;
+#[deprecated = "Use frame::VarInt instead"]
 pub const VARINT_MAX_VALUE: u32 = 0x3FFFFFFF;
 
+#[deprecated = "Use frame::VarInt instead"]
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub struct VarInt(u32);
+pub struct OldVarInt(u32);
 
-impl VarInt {
+impl OldVarInt {
     pub fn new(v: u32) -> Option<Self> {
         if v <= VARINT_MAX_VALUE {
-            Some(VarInt(v))
+            Some(OldVarInt(v))
         } else {
             None
         }
@@ -45,17 +55,17 @@ impl VarInt {
         } else if val < 1073741824 {
             buf.put_u32(val | 0x80000000);
         } else {
-            unreachable!("VarInt value too large");
+            unreachable!("OldVarInt value too large");
         }
     }
 
     pub fn decode_varint<T: Buf + ?Sized>(buf: &mut T) -> Option<Self> {
         let first = buf.get_u8();
         if first < 64 {
-            Some(VarInt(first as u32))
+            Some(OldVarInt(first as u32))
         } else if first < 128 {
             let val = buf.get_u16();
-            Some(VarInt((val & 0x3FFF) as u32))
+            Some(OldVarInt((val & 0x3FFF) as u32))
         } else if first < 192 {
             if buf.remaining() < 3 {
                 return None;
@@ -64,7 +74,7 @@ impl VarInt {
             let b1 = buf.get_u8() as u32;
             let b2 = buf.get_u8() as u32;
             let val = (b0 << 16) | (b1 << 8) | b2;
-            Some(VarInt(val))
+            Some(OldVarInt(val))
         } else {
             None
         }
@@ -82,33 +92,33 @@ impl VarInt {
     }
 }
 
-impl From<u8> for VarInt {
+impl From<u8> for OldVarInt {
     fn from(v: u8) -> Self {
-        VarInt(v as u32)
+        OldVarInt(v as u32)
     }
 }
 
-impl From<u16> for VarInt {
+impl From<u16> for OldVarInt {
     fn from(v: u16) -> Self {
-        VarInt(v as u32)
+        OldVarInt(v as u32)
     }
 }
 
-impl From<u32> for VarInt {
+impl From<u32> for OldVarInt {
     fn from(v: u32) -> Self {
-        VarInt(v)
+        OldVarInt(v)
     }
 }
 
-impl From<VarInt> for u32 {
-    fn from(v: VarInt) -> Self {
+impl From<OldVarInt> for u32 {
+    fn from(v: OldVarInt) -> Self {
         v.0
     }
 }
 
-impl fmt::Debug for VarInt {
+impl fmt::Debug for OldVarInt {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "VarInt({})", self.0)
+        write!(f, "OldVarInt({})", self.0)
     }
 }
 
@@ -124,12 +134,13 @@ pub struct LengthPrefixed<T> {
     pub msg: T,
 }
 
+/// 旧的长度前缀包装器，已弃用，新协议使用帧头自带长度
 impl<T: SEncodeSync> SEncodeSync for LengthPrefixed<T> {
     fn encode_sync(&self, buf: &mut BytesMut) {
         let body_start = buf.len();
         self.msg.encode_sync(buf);
         let body_len = buf.len() - body_start;
-        let varint = VarInt::new(body_len as u32).expect("message too large");
+        let varint = OldVarInt::new(body_len as u32).expect("message too large");
         let encoded_len = varint.encoded_len();
 
         buf.reserve(encoded_len);
@@ -160,7 +171,7 @@ impl<T: SEncodeSync> SEncodeSync for LengthPrefixed<T> {
 
 impl<T: SDecodeSync> SDecodeSync for LengthPrefixed<T> {
     fn decode_sync(buf: &mut Bytes) -> Option<Self> {
-        let varint = VarInt::decode_varint(buf)?;
+        let varint = OldVarInt::decode_varint(buf)?;
         let len = varint.inner() as usize;
         if buf.remaining() < len {
             return None;

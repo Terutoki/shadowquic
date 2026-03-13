@@ -26,11 +26,10 @@ use crate::utils::memory_pool::{
 use crate::{
     AnyUdpRecv, AnyUdpSend,
     error::{SError, SResult},
-    msgs::squic::SunnyCredential,
+    msgs::frame::{ClientHello, ConnectReq, Frame, ServerHello, UdpData, ERROR_OK, FEATURE_UDP},
     msgs::{
         SDecode, SDecodeSync, SEncode, SEncodeSync, decode_to_async, encode_to_async,
         socks5::SocksAddr,
-        squic::{SQPacketDatagramHeader, SQReq, SQUdpControlHeader},
     },
     quic::{QuicConnection, STATS},
 };
@@ -40,6 +39,7 @@ pub mod inbound;
 pub mod outbound;
 
 pub use id_store_optimized::LockFreeIdTable;
+pub use self::inbound::SunnyQuicUsers;
 
 /// SQuic connection, it is shared by sunnyquic and shadowquic and is a wrapper of quic connection.
 /// It contains a connection object and two ID store for managing UDP sockets.
@@ -61,14 +61,41 @@ async fn wait_sunny_auth<T: QuicConnection>(conn: &SQConn<T>) -> SResult<()> {
     }
 }
 
+/// Type alias for authentication credential
+pub type SunnyCredential = [u8; 64];
+
 pub(crate) async fn auth_sunny<T: QuicConnection>(
     conn: &SQConn<T>,
     user_hash: SunnyCredential,
 ) -> SResult<()> {
     if conn.authed.get().is_none() {
-        let (mut send, _recv, _id) = conn.open_bi().await?;
-        encode_to_async(&SQReq::SQAuthenticate(user_hash), &mut send).await?;
-        debug!("authentication request sent");
+        let (mut send, mut recv, _id) = conn.open_bi().await?;
+        
+        // 发送ClientHello进行握手
+        let hello = ClientHello {
+            version: 1,
+            supported_features: FEATURE_UDP,
+            auth_token: user_hash,
+            extensions: vec![],
+        };
+        Frame::ClientHello(hello).encode(&mut send).await?;
+        debug!("ClientHello sent");
+        
+        // 接收ServerHello
+        let frame = Frame::decode(&mut recv).await?;
+        match frame {
+            Frame::ServerHello(server_hello) => {
+                debug!("ServerHello received, connection ID: {}", server_hello.connection_id);
+                if server_hello.version != 1 {
+                    return Err(SError::ProtocolViolation);
+                }
+            }
+            _ => {
+                conn.close(263, &[]);
+                return Err(SError::SunnyAuthError("Protocol error".into()));
+            }
+        }
+        
         conn.authed.set(true).expect("repeated authentication");
     }
     Ok(())
@@ -307,17 +334,7 @@ pub async fn handle_udp_send<C: QuicConnection>(
 
         let (id, is_new) = session.get_id_or_insert(&dst).await;
 
-        // Send control header first if new
-        if is_new {
-            header_buf.clear();
-            SQUdpControlHeader {
-                dst: dst.clone(),
-                id,
-            }
-            .encode_sync(&mut header_buf);
-            send.write_all(&header_buf).await?;
-        }
-
+        // Send UDP data using new protocol
         if over_stream {
             use std::collections::hash_map::Entry;
             let uni_conn = match session.unistream_map.entry(dst.clone()) {
@@ -327,48 +344,27 @@ pub async fn handle_udp_send<C: QuicConnection>(
                     e.insert(uni)
                 }
             };
-            header_buf.clear();
-            if is_new {
-                SQPacketDatagramHeader { id }.encode_sync(&mut header_buf);
-            }
-            (bytes.len() as u16).encode_sync(&mut header_buf);
-
-            // Use stack buffer for small packets
-            let combined_len = header_buf.len() + bytes.len();
-            if combined_len <= stack_buf.len() {
-                stack_buf[..header_buf.len()].copy_from_slice(&header_buf);
-                stack_buf[header_buf.len()..combined_len].copy_from_slice(&bytes);
-                uni_conn.write_all(&stack_buf[..combined_len]).await?;
-            } else {
-                // Large packet: use fast allocator
-                let mut combined = fast_alloc(combined_len);
-                combined.extend_from_slice(&header_buf);
-                combined.extend_from_slice(&bytes);
-                uni_conn.write_all(&combined).await?;
-            }
+            
+            // Use new UdpData frame
+            let udp_data = UdpData {
+                dst: if is_new { Some(dst.clone()) } else { None },
+                payload: bytes,
+            };
+            let mut frame = Frame::UdpData(udp_data);
+            frame.encode_sync(&mut header_buf);
+            uni_conn.write_all(&header_buf).await?;
         } else {
-            // Datagram path - ZERO-COPY: use chained slices
-            header_buf.clear();
-            SQPacketDatagramHeader { id }.encode_sync(&mut header_buf);
-
-            // For datagram, we need to combine. Use reserve_exact to avoid reallocation
-            let total_len = header_buf.len() + bytes.len();
-            if datagram_buf.capacity() >= total_len {
-                datagram_buf.clear();
-                datagram_buf.extend_from_slice(&header_buf);
-                datagram_buf.extend_from_slice(&bytes);
-                quic_conn
-                    .send_datagram(datagram_buf.split().freeze())
-                    .await?;
-            } else {
-                // Need larger buffer
-                datagram_buf = fast_alloc(total_len);
-                datagram_buf.extend_from_slice(&header_buf);
-                datagram_buf.extend_from_slice(&bytes);
-                quic_conn
-                    .send_datagram(datagram_buf.split().freeze())
-                    .await?;
-            }
+            // Datagram path - use new UdpData frame
+            let udp_data = UdpData {
+                dst: if is_new { Some(dst.clone()) } else { None },
+                payload: bytes,
+            };
+            let mut datagram_buf = BytesMut::new();
+            Frame::UdpData(udp_data).encode_sync(&mut datagram_buf);
+            
+            quic_conn
+                .send_datagram(datagram_buf.freeze())
+                .await?;
         }
     }
 }
@@ -387,9 +383,24 @@ pub async fn handle_udp_recv_ctrl<C: QuicConnection>(
         lock_free_table: conn.lock_free_id_table.clone(),
     };
     loop {
-        let SQUdpControlHeader { id, dst } = SQUdpControlHeader::decode(&mut recv).await?;
-        trace!("udp control header received: id:{},dst:{}", id, dst);
-        session.store_socket(id, dst, udp_socket.clone()).await;
+        // Use new UdpData frame for control
+        let frame = Frame::decode(&mut recv).await?;
+        match frame {
+            Frame::UdpData(udp_data) => {
+                if let Some(dst) = udp_data.dst {
+                    let id = rand::random::<u16>();
+                    trace!("udp data received with dst: {}, assigning id:{}", dst, id);
+                    session.store_socket(id, dst, udp_socket.clone()).await;
+                }
+            }
+            Frame::Fin => {
+                trace!("UDP session finished");
+                break;
+            }
+            _ => {
+                trace!("unexpected frame type in UDP control");
+            }
+        }
     }
     #[allow(unreachable_code)]
     Ok(())
@@ -454,13 +465,26 @@ pub async fn handle_udp_packet_recv<C: QuicConnection>(conn: SQConn<C>) -> Resul
             r = async {
                 let (mut uni_stream, _id) = conn.accept_uni().await?;
                 trace!("unistream accepted");
-                let SQPacketDatagramHeader{id} = SQPacketDatagramHeader::decode(&mut uni_stream).await?;
+                
+                // Use new UdpData frame
+                let frame = Frame::decode(&mut uni_stream).await?;
+                let (id, dst) = match frame {
+                    Frame::UdpData(udp_data) => {
+                        let id = rand::random::<u16>();
+                        (id, udp_data.dst.unwrap_or_else(|| SocksAddr::from_domain("0.0.0.0".to_string(), 0)))
+                    }
+                    Frame::Fin => {
+                        return Ok((uni_stream, None, None)) as Result<_, SError>;
+                    }
+                    _ => return Err(SError::ProtocolViolation),
+                };
+                
                 event!(Level::TRACE, "resolving datagram id:{}",id);
 
                 let (udp,addr) = id_store.get_socket_or_wait(id).await?;
 
                 info!("udp over stream: id:{}: {}->{}",id, conn.remote_address(), addr);
-                Ok((uni_stream,udp.clone(),addr.clone())) as Result<(C::RecvStream,AnyUdpSend,SocksAddr),SError>
+                Ok((uni_stream,Some(udp.clone()),Some(addr.clone()))) as Result<(C::RecvStream,Option<AnyUdpSend>,Option<SocksAddr>),SError>
             } => {
 
                 let  (mut uni_stream,udp,addr) = match r {
@@ -473,27 +497,35 @@ pub async fn handle_udp_packet_recv<C: QuicConnection>(conn: SQConn<C>) -> Resul
                     }
                 };
 
+                // Handle Fin frame
+                if udp.is_none() {
+                    trace!("UDP stream finished");
+                    continue;
+                }
+
+                let udp = udp.unwrap();
+                let addr = addr.unwrap();
+
                 // Batch receive and send for better throughput
                 tokio::spawn(async move {
-                    let mut buf = fast_alloc_large();
                     loop {
-                        let l: usize = match u16::decode(&mut uni_stream).await {
-                            Ok(l) => l as usize,
+                        // Use new UdpData frame for receiving
+                        let frame = match Frame::decode(&mut uni_stream).await {
+                            Ok(f) => f,
                             Err(_) => break,
                         };
-
-                        if l > buf.capacity() {
-                            buf = fast_alloc(l);
+                        
+                        match frame {
+                            Frame::UdpData(udp_data) => {
+                                let payload = udp_data.payload;
+                                let _ = udp.send_to(payload, addr.clone()).await;
+                            }
+                            Frame::Fin => {
+                                trace!("UDP stream finished");
+                                break;
+                            }
+                            _ => break,
                         }
-                        buf.clear();
-                        buf.resize(l, 0);
-
-                        if uni_stream.read_exact(&mut buf[..l]).await.is_err() {
-                            break;
-                        }
-
-                        // Use try_send to avoid blocking
-                        let _ = udp.send_to(buf.split().freeze(), addr.clone()).await;
                     }
                     Ok(()) as Result<(), SError>
                 }.in_current_span());

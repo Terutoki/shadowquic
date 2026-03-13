@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
-use crate::msgs::squic::{SUNNY_QUIC_AUTH_LEN, SunnyCredential};
+use crate::squic::SunnyCredential;
+use crate::msgs::squic::SUNNY_QUIC_AUTH_LEN;
 
 pub mod inbound;
 pub mod outbound;
@@ -43,5 +44,5 @@ pub fn gen_sunny_user_hash(username: &str, password: &str) -> SunnyCredential {
     let hash_bytes = hash_out.as_ref();
     let len = arr.len().min(hash_bytes.len());
     arr[..len].copy_from_slice(&hash_bytes[..len]);
-    Arc::new(arr)
+    arr
 }

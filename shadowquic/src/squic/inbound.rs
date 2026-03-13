@@ -1,4 +1,5 @@
 use bytes::Bytes;
+use rand::Rng;
 use std::{pin::Pin, sync::Arc};
 
 use rustc_hash::FxHashMap;
@@ -12,10 +13,10 @@ use tracing::{Instrument, Level, event, info, trace, trace_span};
 use crate::{
     ProxyRequest, TcpSession, TcpTrait, UdpSession,
     error::SError,
+    msgs::frame::{ClientHello, ConnectReq, Frame, ServerHello, UdpAssociateReq, ERROR_OK, FEATURE_UDP},
     msgs::{
-        SDecode,
+        SDecode, SEncode,
         socks5::SocksAddr,
-        squic::{SQReq, SunnyCredential},
     },
     quic::QuicConnection,
     squic::wait_sunny_auth,
@@ -23,7 +24,7 @@ use crate::{
 
 use super::{SQConn, handle_udp_packet_recv, handle_udp_recv_ctrl, handle_udp_send};
 
-pub type SunnyQuicUsers = Arc<FxHashMap<SunnyCredential, String>>;
+pub type SunnyQuicUsers = Arc<FxHashMap<[u8; 64], String>>;
 
 #[derive(Clone)]
 pub struct SQServerConn<C: QuicConnection> {
@@ -69,25 +70,51 @@ impl<C: QuicConnection> SQServerConn<C> {
 
     // Optimized bistream handler - avoids self clone
     async fn handle_bistream_optimized(
-        users: SunnyQuicUsers,
+        users: Arc<FxHashMap<[u8; 64], String>>,
         inner: SQConn<C>,
-        send: C::SendStream,
+        mut send: C::SendStream,
         mut recv: C::RecvStream,
         req_send: Sender<ProxyRequest>,
     ) -> Result<(), SError> {
-        let req = SQReq::decode(&mut recv).await?;
+        let frame = Frame::decode(&mut recv).await?;
 
-        match req {
-            SQReq::SQConnect(dst) => {
+        match frame {
+            Frame::ClientHello(hello) => {
+                // 处理握手请求
+                if hello.version != 1 {
+                    inner.close(263, &[]);
+                    return Err(SError::ProtocolViolation);
+                }
+                
+                if let Some(name) = users.get(&hello.auth_token) {
+                    tracing::info!("user authenticated:{}", name);
+                    
+                    // 发送ServerHello响应
+                    let server_hello = ServerHello {
+                        version: 1,
+                        selected_features: FEATURE_UDP,
+                        connection_id: rand::random(),
+                        extensions: vec![],
+                    };
+                    Frame::ServerHello(server_hello).encode(&mut send).await?;
+                    
+                    inner.authed.set(true).expect("repeated authentication!");
+                } else {
+                    tracing::error!("authentication failed");
+                    inner.close(263, &[]);
+                    return Err(SError::SunnyAuthError("Wrong password/username".into()));
+                }
+            }
+            Frame::Connect(req) => {
                 wait_sunny_auth(&inner).await?;
                 info!(
                     "connect request: {}->{} accepted",
                     inner.remote_address(),
-                    dst
+                    req.dst
                 );
                 let tcp: TcpSession = TcpSession {
                     stream: Box::new(Unsplit { s: send, r: recv }),
-                    dst,
+                    dst: req.dst,
                     session_id: None,
                 };
                 req_send
@@ -95,9 +122,9 @@ impl<C: QuicConnection> SQServerConn<C> {
                     .await
                     .map_err(|_| SError::OutboundUnavailable)?;
             }
-            ref req @ (SQReq::SQAssociatOverDatagram(ref dst)
-            | SQReq::SQAssociatOverStream(ref dst)) => {
+            Frame::UdpAssociate(req) => {
                 wait_sunny_auth(&inner).await?;
+                let dst = req.dst.ok_or(SError::ProtocolViolation)?;
                 info!("association request to {} accepted", dst);
 
                 // Use larger channel buffer for better throughput
@@ -111,7 +138,7 @@ impl<C: QuicConnection> SQServerConn<C> {
                     session_id: None,
                 };
                 let local_send = Arc::new(local_send);
-                let over_stream = matches!(req, SQReq::SQAssociatOverStream(_));
+                let over_stream = true; // 新协议统一使用流模式
 
                 if req_send.send(ProxyRequest::Udp(udp)).await.is_err() {
                     return Err(SError::OutboundUnavailable)?;
@@ -121,18 +148,10 @@ impl<C: QuicConnection> SQServerConn<C> {
                 let fut2 = handle_udp_recv_ctrl(recv, local_send, inner);
                 tokio::try_join!(fut1, fut2)?;
             }
-            SQReq::SQAuthenticate(passwd_hash) => {
-                if let Some(name) = users.get(passwd_hash.as_ref()) {
-                    tracing::info!("user authenticated:{}", name);
-                    inner.authed.set(true).expect("repeated authentication!");
-                } else {
-                    tracing::error!("authentication failed");
-                    inner.close(263, &[]);
-                    return Err(SError::SunnyAuthError("Wrong password/username".into()));
-                }
-            }
             _ => {
-                unimplemented!()
+                tracing::warn!("unknown frame type received");
+                inner.close(263, &[]);
+                return Err(SError::ProtocolViolation);
             }
         }
         Ok(())
