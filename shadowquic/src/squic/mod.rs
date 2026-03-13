@@ -392,15 +392,18 @@ pub async fn handle_udp_recv_ctrl<C: QuicConnection>(
         match frame {
             Frame::UdpData(udp_data) => {
                 let dst = udp_data.dst.clone();
-                let payload = udp_data.payload.clone();
                 
                 if let Some(ref dst) = dst {
                     let id = rand::random::<u16>();
                     trace!("udp data received with dst: {}, assigning id:{}", dst, id);
                     session.store_socket(id, dst.clone(), udp_socket.clone()).await;
                     
-                    // 发送UDP数据到实际socket
-                    let _ = udp_socket.send_to(payload, dst.clone()).await;
+                    // 发送UDP数据到channel (UdpSession.recv)
+                    // dst是目标地址，payload是数据
+                    let _ = udp_socket.send_to(udp_data.payload, dst.clone()).await;
+                } else {
+                    // 没有目标地址的UDP数据（不应该出现）
+                    trace!("udp data received without dst");
                 }
             }
             Frame::Fin => {
