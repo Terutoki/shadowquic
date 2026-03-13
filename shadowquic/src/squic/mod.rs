@@ -324,7 +324,6 @@ pub async fn handle_udp_send<C: QuicConnection>(
     STATS.connection_opened();
 
     // Pre-allocated buffers to avoid per-packet allocation
-    let mut datagram_buf = fast_alloc_large();
     let mut header_buf = BytesMut::with_capacity(64);
     // Stack buffer for small packets (avoid heap allocation)
     let mut stack_buf = [0u8; 256];
@@ -346,6 +345,9 @@ pub async fn handle_udp_send<C: QuicConnection>(
                 }
             };
             
+            // Clear header buffer before encoding
+            header_buf.clear();
+            
             // Use new UdpData frame
             let udp_data = UdpData {
                 dst: if is_new { Some(dst.clone()) } else { None },
@@ -356,15 +358,16 @@ pub async fn handle_udp_send<C: QuicConnection>(
             uni_conn.write_all(&header_buf).await?;
         } else {
             // Datagram path - use new UdpData frame
+            let mut frame_buf = BytesMut::new();
+            
             let udp_data = UdpData {
                 dst: if is_new { Some(dst.clone()) } else { None },
                 payload: bytes,
             };
-            let mut datagram_buf = BytesMut::new();
-            Frame::UdpData(udp_data).encode_sync(&mut datagram_buf);
+            Frame::UdpData(udp_data).encode_sync(&mut frame_buf);
             
             quic_conn
-                .send_datagram(datagram_buf.freeze())
+                .send_datagram(frame_buf.freeze())
                 .await?;
         }
     }
