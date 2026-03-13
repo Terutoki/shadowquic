@@ -10,7 +10,7 @@ use crate::{
     ProxyRequest,
     error::SError,
     msgs::frame::{ConnectReq, Frame, UdpAssociateReq},
-    msgs::{encode_to_async, SEncode, socks5::SocksAddr},
+    msgs::{encode_to_async, SDecode, SEncode, socks5::SocksAddr},
     quic::QuicConnection,
     squic::{handle_udp_recv_ctrl, handle_udp_send},
 };
@@ -22,7 +22,7 @@ pub async fn handle_request<C: QuicConnection>(
     conn: SQConn<C>,
     over_stream: bool,
 ) -> Result<(), SError> {
-    let (mut send, recv, id) = QuicConnection::open_bi(&conn.conn).await?;
+    let (mut send, mut recv, id) = QuicConnection::open_bi(&conn.conn).await?;
     let _span = span!(Level::TRACE, "bistream", id = id);
     let fut = async move {
         match req {
@@ -36,6 +36,11 @@ pub async fn handle_request<C: QuicConnection>(
                 };
                 Frame::Connect(req).encode(&mut send).await?;
                 trace!("tcp connect req header sent");
+                
+                // Read and discard ConnectAck response
+                use crate::msgs::frame::Frame;
+                let ack = Frame::decode(&mut recv).await?;
+                trace!("connect ack received: {:?}", ack);
 
                 let u = tokio::io::copy_bidirectional(
                     &mut Unsplit { s: send, r: recv },
