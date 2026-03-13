@@ -391,10 +391,16 @@ pub async fn handle_udp_recv_ctrl<C: QuicConnection>(
         let frame = Frame::decode(&mut recv).await?;
         match frame {
             Frame::UdpData(udp_data) => {
-                if let Some(dst) = udp_data.dst {
+                let dst = udp_data.dst.clone();
+                let payload = udp_data.payload.clone();
+                
+                if let Some(ref dst) = dst {
                     let id = rand::random::<u16>();
                     trace!("udp data received with dst: {}, assigning id:{}", dst, id);
-                    session.store_socket(id, dst, udp_socket.clone()).await;
+                    session.store_socket(id, dst.clone(), udp_socket.clone()).await;
+                    
+                    // 发送UDP数据到实际socket
+                    let _ = udp_socket.send_to(payload, dst.clone()).await;
                 }
             }
             Frame::Fin => {
