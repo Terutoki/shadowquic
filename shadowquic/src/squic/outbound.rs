@@ -1,6 +1,7 @@
 use bytes::Bytes;
 use std::sync::Arc;
 use tokio::sync::mpsc::{Receiver, Sender, channel};
+use tokio::time::{timeout, Duration};
 
 use tokio::io::AsyncReadExt;
 use tracing::Instrument;
@@ -55,12 +56,25 @@ pub async fn handle_request<C: QuicConnection>(
                     Frame::Connect(req).encode(&mut send).await?;
                     trace!("tcp connect req header sent");
                     
-                    // Read ConnectAck response before starting data transfer
-                    let ack = Frame::decode(&mut recv).await?;
-                    trace!("ConnectAck received: {:?}", ack);
+                    // 尝试非阻塞读取可能的ConnectAck并丢弃
+                    // 这不会增加RTT，因为Server可以立即发送数据
+                    // 如果Server发送了ConnectAck，它已经在buffer中
+                    use tokio::time::{timeout, Duration};
+                    match timeout(Duration::from_millis(10), Frame::decode(&mut recv)).await {
+                        Ok(Ok(Frame::ConnectAck(_))) => {
+                            trace!("ConnectAck received and discarded");
+                        }
+                        Ok(Ok(_)) => {
+                            // 收到了其他Frame，记录警告
+                            trace!("unexpected frame type, continuing");
+                        }
+                        _ => {
+                            // 超时或错误，忽略继续
+                        }
+                    }
                 }
 
-                // 直接开始数据传输，无需等待确认
+                // 直接开始数据传输
                 let u = tokio::io::copy_bidirectional(
                     &mut Unsplit { s: send, r: recv },
                     &mut tcp_session.stream,
