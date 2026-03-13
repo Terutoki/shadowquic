@@ -67,9 +67,12 @@ impl SunnyQuicClient {
             .await;
         let conn = QuicClient::connect(end, addr, &self.config.server_name).await?;
 
+        let user_hash = gen_sunny_user_hash(&self.config.username, &self.config.password);
+        
         let conn = SQConn {
             conn,
             authed: Arc::new(SetOnce::new()),
+            auth_token: Arc::new(SetOnce::new_with(Some(user_hash))),  // 0-RTT: store token
             send_id_store: Default::default(),
             recv_id_store: IDStore::default(),
             lock_free_id_table: Arc::new(LockFreeIdTable::new(1024)),

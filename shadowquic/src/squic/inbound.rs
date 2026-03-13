@@ -13,7 +13,7 @@ use tracing::{Instrument, Level, event, info, trace, trace_span};
 use crate::{
     ProxyRequest, TcpSession, TcpTrait, UdpSession,
     error::SError,
-    msgs::frame::{ClientHello, ConnectReq, Frame, ServerHello, UdpAssociateReq, ERROR_OK, FEATURE_UDP},
+    msgs::frame::{ClientHello, ConnectReq, FastConnectReq, Frame, ServerHello, UdpAssociateReq, ERROR_OK, FEATURE_UDP},
     msgs::{
         SDecode, SEncode,
         socks5::SocksAddr,
@@ -79,6 +79,39 @@ impl<C: QuicConnection> SQServerConn<C> {
         let frame = Frame::decode(&mut recv).await?;
 
         match frame {
+            // 0-RTT: FastConnect (auth + connect in one message)
+            Frame::FastConnect(req) => {
+                if let Some(name) = users.get(&req.auth_token) {
+                    tracing::info!("FastConnect user authenticated:{}", name);
+                    
+                    // 发送FastConnectAck响应
+                    use crate::msgs::frame::FastConnectAck;
+                    let ack = FastConnectAck {
+                        status: 0,
+                        bind_addr: req.dst.clone(),
+                        connection_id: rand::random(),
+                        extensions: vec![],
+                    };
+                    Frame::FastConnectAck(ack).encode(&mut send).await?;
+                    
+                    inner.authed.set(true).expect("repeated authentication!");
+                    
+                    // 直接开始数据转发
+                    let tcp: TcpSession = TcpSession {
+                        stream: Box::new(Unsplit { s: send, r: recv }),
+                        dst: req.dst,
+                        session_id: None,
+                    };
+                    req_send
+                        .send(ProxyRequest::Tcp(tcp))
+                        .await
+                        .map_err(|_| SError::OutboundUnavailable)?;
+                } else {
+                    tracing::error!("FastConnect authentication failed");
+                    inner.close(263, &[]);
+                    return Err(SError::SunnyAuthError("Wrong password/username".into()));
+                }
+            }
             Frame::ClientHello(hello) => {
                 // 处理握手请求
                 if hello.version != 1 {

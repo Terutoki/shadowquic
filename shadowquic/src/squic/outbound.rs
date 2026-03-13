@@ -9,7 +9,7 @@ use tracing::{Level, debug, error, info, span, trace};
 use crate::{
     ProxyRequest,
     error::SError,
-    msgs::frame::{ConnectReq, Frame, UdpAssociateReq},
+    msgs::frame::{ConnectReq, FastConnectReq, Frame, UdpAssociateReq},
     msgs::{encode_to_async, SDecode, SEncode, socks5::SocksAddr},
     quic::QuicConnection,
     squic::{handle_udp_recv_ctrl, handle_udp_send},
@@ -25,17 +25,36 @@ pub async fn handle_request<C: QuicConnection>(
     let (mut send, mut recv, id) = QuicConnection::open_bi(&conn.conn).await?;
     let _span = span!(Level::TRACE, "bistream", id = id);
     let fut = async move {
+        // 获取认证信息（如果有的话）
+        let auth_token = conn.auth_token.get().cloned();
+        
         match req {
             crate::ProxyRequest::Tcp(mut tcp_session) => {
                 let dst = tcp_session.dst.clone();
                 debug!("bistream opened for tcp dst:{}", dst);
-                //let _enter = _span.enter();
-                let req = ConnectReq {
-                    dst: tcp_session.dst,
-                    extensions: vec![],
-                };
-                Frame::Connect(req).encode(&mut send).await?;
-                trace!("tcp connect req header sent");
+                
+                // 0-RTT: 使用FastConnect合并认证+连接
+                if let Some(token) = auth_token {
+                    let req = FastConnectReq {
+                        auth_token: token,
+                        dst: tcp_session.dst.clone(),
+                        extensions: vec![],
+                    };
+                    Frame::FastConnect(req).encode(&mut send).await?;
+                    trace!("FastConnect (0-RTT) sent");
+                    
+                    // 等待FastConnectAck响应
+                    let ack = Frame::decode(&mut recv).await?;
+                    trace!("FastConnectAck received: {:?}", ack);
+                } else {
+                    // 1-RTT: 普通Connect（无认证）
+                    let req = ConnectReq {
+                        dst: tcp_session.dst,
+                        extensions: vec![],
+                    };
+                    Frame::Connect(req).encode(&mut send).await?;
+                    trace!("tcp connect req header sent");
+                }
 
                 // 直接开始数据传输，无需等待确认
                 let u = tokio::io::copy_bidirectional(

@@ -41,6 +41,7 @@ impl ShadowQuicServer {
             inner: SQConn {
                 conn: incom,
                 authed: Arc::new(SetOnce::new_with(Some(true))),
+                auth_token: Arc::new(SetOnce::new_with(None)),
                 send_id_store: Default::default(),
                 recv_id_store: IDStore::default(),
                 lock_free_id_table: Arc::new(LockFreeIdTable::new(1024)),

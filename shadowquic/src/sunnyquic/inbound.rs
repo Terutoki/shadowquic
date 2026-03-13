@@ -46,6 +46,7 @@ impl SunnyQuicServer {
             inner: SQConn {
                 conn: incom,
                 authed: Arc::new(SetOnce::new()),
+                auth_token: Arc::new(SetOnce::new()),
                 send_id_store: Default::default(),
                 recv_id_store: IDStore::default(),
                 lock_free_id_table: Arc::new(LockFreeIdTable::new(1024)),

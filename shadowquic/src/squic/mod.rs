@@ -48,6 +48,7 @@ pub use self::inbound::SunnyQuicUsers;
 pub struct SQConn<T: QuicConnection> {
     pub(crate) conn: T,
     pub(crate) authed: Arc<SetOnce<bool>>,
+    pub(crate) auth_token: Arc<SetOnce<[u8; 64]>>,  // 0-RTT auth token
     pub(crate) send_id_store: IDStore<()>,
     pub(crate) recv_id_store: IDStore<(AnyUdpSend, SocksAddr)>,
     pub(crate) lock_free_id_table: Arc<LockFreeIdTable>,
