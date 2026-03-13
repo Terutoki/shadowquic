@@ -99,6 +99,32 @@ impl<C: QuicConnection> SQServerConn<C> {
                     Frame::ServerHello(server_hello).encode(&mut send).await?;
                     
                     inner.authed.set(true).expect("repeated authentication!");
+                    
+                    // 握手完成后，继续等待后续请求
+                    let frame = Frame::decode(&mut recv).await?;
+                    match frame {
+                        Frame::Connect(req) => {
+                            info!(
+                                "connect request: {}->{} accepted",
+                                inner.remote_address(),
+                                req.dst
+                            );
+                            let tcp: TcpSession = TcpSession {
+                                stream: Box::new(Unsplit { s: send, r: recv }),
+                                dst: req.dst,
+                                session_id: None,
+                            };
+                            req_send
+                                .send(ProxyRequest::Tcp(tcp))
+                                .await
+                                .map_err(|_| SError::OutboundUnavailable)?;
+                        }
+                        _ => {
+                            tracing::warn!("unexpected frame after handshake: {:?}", frame);
+                            inner.close(263, &[]);
+                            return Err(SError::ProtocolViolation);
+                        }
+                    }
                 } else {
                     tracing::error!("authentication failed");
                     inner.close(263, &[]);
