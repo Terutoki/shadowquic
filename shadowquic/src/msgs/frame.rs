@@ -120,6 +120,9 @@ pub enum FrameType {
     // UDP相关
     UdpAssociate = 0x20,
     UdpData = 0x21,
+
+    // 0-RTT 快速连接（认证+连接合并）
+    FastConnect = 0x30,
 }
 
 /// 帧标志位
@@ -181,6 +184,23 @@ pub struct ConnectAck {
     pub extensions: Vec<Extension>,
 }
 
+/// 0-RTT 快速连接请求（认证+连接合并）
+#[derive(Debug, Clone)]
+pub struct FastConnectReq {
+    pub auth_token: [u8; 64], // 64字节认证令牌
+    pub dst: SocksAddr,       // 目标地址
+    pub extensions: Vec<Extension>,
+}
+
+/// 0-RTT 快速连接响应
+#[derive(Debug, Clone)]
+pub struct FastConnectAck {
+    pub status: u16,
+    pub bind_addr: SocksAddr,
+    pub connection_id: u64,
+    pub extensions: Vec<Extension>,
+}
+
 /// UDP关联请求
 #[derive(Debug, Clone)]
 pub struct UdpAssociateReq {
@@ -212,6 +232,8 @@ pub enum Frame {
     Error(ErrorFrame),
     Connect(ConnectReq),
     ConnectAck(ConnectAck),
+    FastConnect(FastConnectReq),    // 0-RTT 快速连接
+    FastConnectAck(FastConnectAck), // 0-RTT 快速连接响应
     Data(Bytes),
     Fin,
     Reset(u32),
@@ -411,6 +433,60 @@ impl SDecodeSync for ConnectAck {
     }
 }
 
+impl SEncodeSync for FastConnectReq {
+    fn encode_sync(&self, buf: &mut BytesMut) {
+        buf.extend_from_slice(&self.auth_token);
+        self.dst.encode_sync(buf);
+        self.extensions.encode_sync(buf);
+    }
+}
+
+impl SDecodeSync for FastConnectReq {
+    fn decode_sync(buf: &mut Bytes) -> Option<Self> {
+        if buf.remaining() < 64 {
+            return None;
+        }
+        let mut auth_token = [0u8; 64];
+        buf.copy_to_slice(&mut auth_token);
+        let dst = SocksAddr::decode_sync(buf)?;
+        let extensions = Vec::<Extension>::decode_sync(buf)?;
+
+        Some(FastConnectReq {
+            auth_token,
+            dst,
+            extensions,
+        })
+    }
+}
+
+impl SEncodeSync for FastConnectAck {
+    fn encode_sync(&self, buf: &mut BytesMut) {
+        buf.put_u16(self.status);
+        self.bind_addr.encode_sync(buf);
+        buf.put_u64(self.connection_id);
+        self.extensions.encode_sync(buf);
+    }
+}
+
+impl SDecodeSync for FastConnectAck {
+    fn decode_sync(buf: &mut Bytes) -> Option<Self> {
+        if buf.remaining() < 2 + 8 {
+            return None;
+        }
+        let status = buf.get_u16();
+        let bind_addr = SocksAddr::decode_sync(buf)?;
+        let connection_id = buf.get_u64();
+        let extensions = Vec::<Extension>::decode_sync(buf)?;
+
+        Some(FastConnectAck {
+            status,
+            bind_addr,
+            connection_id,
+            extensions,
+        })
+    }
+}
+
 impl SEncodeSync for UdpAssociateReq {
     fn encode_sync(&self, buf: &mut BytesMut) {
         match &self.dst {
@@ -538,6 +614,8 @@ impl SEncodeSync for Frame {
             Frame::Error(err) => err.encode_sync(buf),
             Frame::Connect(req) => req.encode_sync(buf),
             Frame::ConnectAck(ack) => ack.encode_sync(buf),
+            Frame::FastConnect(req) => req.encode_sync(buf),
+            Frame::FastConnectAck(ack) => ack.encode_sync(buf),
             Frame::Data(data) => buf.extend_from_slice(data),
             Frame::Fin => {}
             Frame::Reset(code) => buf.put_u32(*code),
@@ -557,6 +635,8 @@ impl SEncodeSync for Frame {
             Frame::Error(_) => FrameType::Error,
             Frame::Connect(_) => FrameType::Connect,
             Frame::ConnectAck(_) => FrameType::ConnectAck,
+            Frame::FastConnect(_) => FrameType::FastConnect,
+            Frame::FastConnectAck(_) => FrameType::FastConnect,
             Frame::Data(_) => FrameType::Data,
             Frame::Fin => FrameType::Fin,
             Frame::Reset(_) => FrameType::Reset,
@@ -643,6 +723,10 @@ impl SDecodeSync for Frame {
             FrameType::ConnectAck => {
                 let ack = ConnectAck::decode_sync(&mut payload)?;
                 Frame::ConnectAck(ack)
+            }
+            FrameType::FastConnect => {
+                let req = FastConnectReq::decode_sync(&mut payload)?;
+                Frame::FastConnect(req)
             }
             FrameType::Data => Frame::Data(payload),
             FrameType::Fin => Frame::Fin,
