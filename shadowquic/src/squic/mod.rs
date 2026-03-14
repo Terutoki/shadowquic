@@ -153,10 +153,12 @@ struct AssociateRecvSession {
 impl AssociateRecvSession {
     pub async fn store_socket(&mut self, id: u16, dst: SocksAddr, socks: AnyUdpSend) {
         if let hash_map::Entry::Vacant(e) = self.id_map.entry(id) {
+            // Clone dst once for both stores
+            let dst_for_table = dst.clone();
             // Use lock-free UdpIdStore
             let _ = self.id_store.insert(id, socks.clone(), dst.clone());
             // Also insert into lock-free table for fast path
-            self.lock_free_table.insert(id, socks, dst.clone());
+            self.lock_free_table.insert(id, socks, dst_for_table);
             trace!("recv session: insert id:{}, addr:{}", id, dst);
             e.insert(dst);
         }
