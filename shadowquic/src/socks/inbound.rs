@@ -19,9 +19,9 @@ use crate::{Inbound, ProxyRequest, TcpSession, UdpSession};
 use async_trait::async_trait;
 use socket2::{Domain, Protocol, Socket, Type};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
+use tracing::{debug, error, info, trace, trace_span, warn, Instrument};
 
 use anyhow::Result;
-use tracing::{Instrument, trace, trace_span};
 
 use super::UdpSocksWrap;
 
@@ -197,35 +197,54 @@ impl Inbound for SocksServer {
                 };
 
                 let socket = Arc::new(socket.unwrap());
+                let socket_addr = socket.local_addr().unwrap();
+                debug!("UDP socket bound to: {}", socket_addr);
+                
                 let (local_send, mut local_recv) = channel::<(Bytes, socks5::SocksAddr)>(512);
                 let (local_send2, mut local_recv2) = channel::<(Bytes, socks5::SocksAddr)>(512);
                 let socket1 = socket.clone();
                 let socket2 = socket.clone();
 
+                let socket1_addr = socket1.local_addr().unwrap();
                 tokio::spawn(async move {
                     let mut wrap = UdpSocksWrap::new(socket1, true);
                     loop {
                         let (buf, addr) = match local_recv.recv().await {
                             Some(d) => d,
-                            None => break,
+                            None => {
+                                trace!("channel 1 closed, stopping UDP send loop");
+                                break;
+                            }
                         };
-                        let _ = wrap.send_to(buf, addr).await;
+                        trace!("UDP send: {} bytes to {}", buf.len(), addr);
+                        if let Err(e) = wrap.send_to(buf, addr).await {
+                            warn!("UDP send error: {}", e);
+                            break;
+                        }
                     }
+                    debug!("UDP send task ended");
                 });
 
                 tokio::spawn(async move {
                     let mut wrap = UdpSocksWrap::new(socket2, true);
+                    debug!("UDP receive task started, socket: {}", socket1_addr);
                     loop {
                         let result = wrap.recv_from().await;
                         match result {
                             Ok((buf, addr)) => {
+                                trace!("UDP recv: {} bytes from {}", buf.len(), addr);
                                 if local_send2.send((buf, addr)).await.is_err() {
+                                    trace!("channel 2 closed by receiver");
                                     break;
                                 }
                             }
-                            Err(_) => break,
+                            Err(e) => {
+                                warn!("UDP recv error: {}", e);
+                                break;
+                            }
                         }
                     }
+                    debug!("UDP receive task ended");
                 });
 
                 Ok(ProxyRequest::Udp(UdpSession {
