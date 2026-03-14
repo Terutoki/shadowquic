@@ -240,8 +240,9 @@ pub async fn handle_udp_send<C: QuicConnection>(
             let mut frame = Frame::UdpData(udp_data);
             frame.encode_sync(&mut header_buf);
             info!("handle_udp_send: writing {} bytes to unidirectional stream (stream mode)", header_buf.len());
+            info!("handle_udp_send: QUIC connection status: close_reason={:?}", conn.close_reason());
             uni_conn.write_all(&header_buf).await?;
-            info!("handle_udp_send: written to unidirectional stream, data sent");
+            info!("handle_udp_send: data written to unidirectional stream successfully");
         } else {
             // Datagram path - use new UdpData frame
             let mut frame_buf = BytesMut::new();
