@@ -138,14 +138,22 @@ impl DirectOut {
         let mut first_packet: Option<(Bytes, SocksAddr)> = None;
         let dst = if bind_addr.is_unspecified() {
             trace!("waiting for first UDP packet to determine destination");
-            let (buf, pkt_dst) = udp_session.recv.recv_from().await?;
-            let packet_dst = pkt_dst.clone();
-            first_packet = Some((buf, pkt_dst));
-            trace!("first UDP packet dst: {}", packet_dst);
-            packet_dst
-                .to_socket_addrs()?
-                .next()
-                .ok_or(SError::DomainResolveFailed(packet_dst.to_string()))?
+            let result = udp_session.recv.recv_from().await;
+            match result {
+                Ok((buf, pkt_dst)) => {
+                    let packet_dst = pkt_dst.clone();
+                    first_packet = Some((buf, pkt_dst));
+                    trace!("first UDP packet dst: {}", packet_dst);
+                    packet_dst
+                        .to_socket_addrs()?
+                        .next()
+                        .ok_or(SError::DomainResolveFailed(packet_dst.to_string()))?
+                }
+                Err(e) => {
+                    error!("failed to receive first UDP packet: {}", e);
+                    return Err(e);
+                }
+            }
         } else {
             trace!("associating udp to {}", bind_addr);
             bind_addr
