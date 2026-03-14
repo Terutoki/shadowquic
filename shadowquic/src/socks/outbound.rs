@@ -16,7 +16,6 @@ use crate::{
 use tokio::{
     io::{AsyncReadExt, copy_bidirectional_with_sizes},
     net::{TcpStream, UdpSocket},
-    sync::OnceCell,
 };
 
 use async_trait::async_trait;
@@ -196,8 +195,7 @@ impl SocksClient {
 
         let socket = UdpSocket::bind(bind_addr).await?;
         socket.connect(final_peer_addr).await?;
-        let mut upstream =
-            UdpSocksWrap(Arc::new(socket), OnceCell::new_with(Some(final_peer_addr)));
+        let mut upstream = UdpSocksWrap::new(Arc::new(socket), false);
 
         let upstream_clone = upstream.clone();
         let fut1 = async move {

@@ -194,8 +194,8 @@ impl Inbound for SocksServer {
                 };
                 let socket = Arc::new(socket.unwrap());
                 Ok(ProxyRequest::Udp(UdpSession {
-                    send: Arc::new(UdpSocksWrap(socket.clone(), Default::default())),
-                    recv: Box::new(UdpSocksWrap(socket, Default::default())),
+                    send: Arc::new(UdpSocksWrap::new(socket.clone(), true)),
+                    recv: Box::new(UdpSocksWrap::new(socket, true)),
                     bind_addr: req.dst,
                     stream: Some(Box::new(s)),
                     session_id,
