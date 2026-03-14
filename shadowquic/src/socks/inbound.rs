@@ -198,18 +198,18 @@ impl Inbound for SocksServer {
 
                 let socket = Arc::new(socket.unwrap());
                 let socket_addr = socket.local_addr().unwrap();
-                debug!("UDP socket bound to: {}, bind_addr: {}", socket_addr, req.dst);
+                info!("UDP socket bound to: {}, bind_addr: {}", socket_addr, req.dst);
                 
                 let (local_send, mut local_recv) = channel::<(Bytes, socks5::SocksAddr)>(512);
                 let (local_send2, mut local_recv2) = channel::<(Bytes, socks5::SocksAddr)>(512);
-                debug!("UDP channels created, spawning tasks");
+                info!("UDP channels created, spawning tasks");
                 
                 let socket1 = socket.clone();
                 let socket2 = socket.clone();
 
                 let socket1_addr = socket1.local_addr().unwrap();
-                tokio::spawn(async move {
-                    debug!("UDP send task spawned for socket {}", socket1_addr);
+                let handle = tokio::spawn(async move {
+                    info!("UDP send task STARTED for socket {}", socket1_addr);
                     let mut wrap = UdpSocksWrap::new(socket1, true);
                     loop {
                         let (buf, addr) = match local_recv.recv().await {
@@ -228,8 +228,8 @@ impl Inbound for SocksServer {
                     debug!("UDP send task ended");
                 });
 
-                tokio::spawn(async move {
-                    debug!("UDP receive task spawned for socket {}", socket1_addr);
+                let handle2 = tokio::spawn(async move {
+                    info!("UDP receive task STARTED for socket {}", socket1_addr);
                     let mut wrap = UdpSocksWrap::new(socket2, true);
                     debug!("UDP receive task started, socket: {}", socket1_addr);
                     loop {
@@ -251,7 +251,7 @@ impl Inbound for SocksServer {
                     debug!("UDP receive task ended");
                 });
 
-                debug!("Returning UdpSession with UDP relay");
+                info!("Returning UdpSession with UDP relay, handles: {:?}, {:?}", handle.id(), handle2.id());
                 Ok(ProxyRequest::Udp(UdpSession {
                     send: Arc::new(local_send),
                     recv: Box::new(local_recv2),
