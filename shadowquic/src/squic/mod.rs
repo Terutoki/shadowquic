@@ -7,7 +7,8 @@ use std::{
     time::Duration,
 };
 
-use bytes::BytesMut;
+use async_trait::async_trait;
+use bytes::{Bytes, BytesMut};
 use rustc_hash::{FxBuildHasher, FxHashMap};
 use tokio::{
     io::{AsyncReadExt, AsyncWrite, AsyncWriteExt},
@@ -25,7 +26,7 @@ use crate::utils::memory_pool::{
 };
 
 use crate::{
-    AnyUdpRecv, AnyUdpSend,
+    AnyUdpRecv, AnyUdpSend, UdpSession, ProxyRequest, UdpSend, UdpRecv,
     error::{SError, SResult},
     msgs::frame::{ClientHello, ConnectReq, ERROR_OK, FEATURE_UDP, Frame, ServerHello, UdpData},
     msgs::{
@@ -233,8 +234,9 @@ pub async fn handle_udp_send<C: QuicConnection>(
             header_buf.clear();
 
             // Use new UdpData frame
+            // Always include destination to ensure server can route packets correctly
             let udp_data = UdpData {
-                dst: if is_new { Some(dst.clone()) } else { None },
+                dst: Some(dst.clone()),
                 payload: bytes,
             };
             let mut frame = Frame::UdpData(udp_data);
@@ -247,8 +249,9 @@ pub async fn handle_udp_send<C: QuicConnection>(
             // Datagram path - use new UdpData frame
             let mut frame_buf = BytesMut::new();
 
+            // Always include destination to ensure server can route packets correctly
             let udp_data = UdpData {
-                dst: if is_new { Some(dst.clone()) } else { None },
+                dst: Some(dst.clone()),
                 payload: bytes,
             };
             Frame::UdpData(udp_data).encode_sync(&mut frame_buf);
@@ -329,139 +332,135 @@ pub async fn handle_udp_recv_ctrl<C: QuicConnection>(
     Ok(())
 }
 
-/// Handle udp packet receive task - OPTIMIZED
-/// Uses lock-free lookup first for maximum performance
-pub async fn handle_udp_packet_recv<C: QuicConnection>(conn: SQConn<C>) -> Result<(), SError> {
-    info!("handle_udp_packet_recv: started, waiting for auth...");
-    let id_store = conn.recv_id_store.clone();
+/// Hash a destination address to get a consistent ID for session lookup
+pub fn hash_dst(dst: &SocksAddr) -> u16 {
+    use std::hash::{Hash, Hasher};
+    use rustc_hash::FxHasher;
+    let mut hasher = FxHasher::default();
+    dst.hash(&mut hasher);
+    (hasher.finish() & 0xFFFF) as u16
+}
+
+/// Handle UDP relay from client to DirectOut (server-side)
+/// This handles the data path: client -> uni stream -> DirectOut
+/// Looks up the existing UDP session from lock_free_id_table and forwards data through it
+pub async fn handle_udp_relay_to_outbound<C: QuicConnection>(
+    conn: SQConn<C>,
+    req_send: tokio::sync::mpsc::Sender<ProxyRequest>,
+) -> Result<(), SError> {
+    info!("handle_udp_relay_to_outbound: waiting for auth...");
+    wait_sunny_auth(&conn).await?;
+    info!("handle_udp_relay_to_outbound: auth passed, entering main loop");
+
     let lock_free_table = conn.lock_free_id_table.clone();
 
-    let auth_result = wait_sunny_auth(&conn).await;
-    match auth_result {
-        Ok(()) => info!("handle_udp_packet_recv: auth passed"),
-        Err(e) => {
-            error!("handle_udp_packet_recv: auth failed: {}", e);
-            return Err(e);
-        }
-    }
-    STATS.connection_opened();
-    info!("handle_udp_packet_recv: entering main loop");
     loop {
-        info!("handle_udp_packet_recv: waiting for event...");
-        tokio::select! {
-            b = conn.read_datagram() => {
-                let b = b?;
-                STATS.packet_received(b.len());
+        let (mut uni_stream, _id) = conn.accept_uni().await?;
+        info!("handle_udp_relay_to_outbound: accepted uni stream, decoding frame");
 
-                if b.len() < 2 {
-                    continue;
-                }
-
-                // FAST PATH: Try lock-free lookup first (sync, no await)
-                let id = u16::from_be_bytes([b[0], b[1]]);
-                let payload = b.slice(2..);
-
-                if let Some((udp, addr)) = lock_free_table.try_get(id) {
-                    // Fast path: direct send without async lock
-                    let _ = udp.send_to(payload, addr).await;
-                    continue;
-                }
-
-                // SLOW PATH: Use lock-free UdpIdStore
-                match id_store.get_or_create(id).await {
-                 Ok((udp, addr)) =>  {
-                     // Also insert into lock-free table for future fast path
-                     lock_free_table.insert(id, udp.clone(), addr.clone());
-                     udp.send_to(payload, addr).await?;
-                 }
-                 Err(_) =>  {
-                     // Session closed, ignore
-                     trace!("id:{} session not found", id);
-                 }
-                }
+        let frame = Frame::decode(&mut uni_stream).await?;
+        let first_udp_data = match frame {
+            Frame::UdpData(udp_data) => udp_data,
+            Frame::Fin => {
+                trace!("UDP stream finished");
+                continue;
             }
+            _ => return Err(SError::ProtocolViolation),
+        };
+        let dst = first_udp_data.dst.clone().unwrap_or_else(|| SocksAddr::from_domain("0.0.0.0".to_string(), 0));
 
-            r = async {
-                let (mut uni_stream, _id) = conn.accept_uni().await?;
-                trace!("unistream accepted");
+        info!("handle_udp_relay_to_outbound: UDP to {}", dst);
 
-                // Use new UdpData frame
-                let frame = Frame::decode(&mut uni_stream).await?;
-                let (id, dst) = match frame {
+        // Look up the existing UDP session from lock_free_id_table
+        // Use wildcard ID 0 for UDP ASSOCIATE with unspecified destination
+        let id = 0u16;
+        
+        // Try to get the existing session, with retry for race condition
+        // (UDP data may arrive before UDP ASSOCIATE is processed)
+        let mut found = None;
+        for _ in 0..20 {
+            if let Some((udp_send, _addr)) = lock_free_table.try_get(id) {
+                found = Some(udp_send.clone());
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        
+        let Some(udp_send_clone) = found else {
+            warn!("handle_udp_relay_to_outbound: no UDP session found for id {}", id);
+            continue;
+        };
+
+        // Send the first UDP packet
+        info!("Forwarding UDP to outbound: {} bytes to {}", first_udp_data.payload.len(), dst);
+        let _ = udp_send_clone.send_to(first_udp_data.payload, dst.clone()).await;
+
+        // Process remaining frames in the stream
+        tokio::spawn(async move {
+            loop {
+                let frame = match Frame::decode(&mut uni_stream).await {
+                    Ok(f) => f,
+                    Err(_) => break,
+                };
+
+                match frame {
                     Frame::UdpData(udp_data) => {
-                        let id = rand::random::<u16>();
-                        (id, udp_data.dst.unwrap_or_else(|| SocksAddr::from_domain("0.0.0.0".to_string(), 0)))
+                        let payload = udp_data.payload;
+                        let pkt_dst = udp_data.dst.unwrap_or_else(|| dst.clone());
+                        info!("Forwarding UDP to outbound: {} bytes to {}", payload.len(), pkt_dst);
+                        let _ = udp_send_clone.send_to(payload, pkt_dst).await;
                     }
                     Frame::Fin => {
-                        return Ok((uni_stream, None, None)) as Result<_, SError>;
+                        trace!("UDP stream finished");
+                        break;
                     }
-                    _ => return Err(SError::ProtocolViolation),
-                };
-
-                event!(Level::TRACE, "resolving datagram id:{}",id);
-
-                // Use lock-free UdpIdStore
-                let result = id_store.get_or_create(id).await;
-
-                match result {
-                    Ok((udp, addr)) => {
-                        info!("udp over stream: id:{}: {}->{}",id, conn.remote_address(), addr);
-                        Ok((uni_stream, Some(udp), Some(addr))) as Result<_, SError>
-                    }
-                    Err(_) => {
-                        trace!("id:{} session not found, skipping", id);
-                        Err(SError::UDPSessionClosed("session not found".into()))
-                    }
+                    _ => break,
                 }
-            } => {
-
-                let (mut uni_stream, udp, addr): (C::RecvStream, Option<AnyUdpSend>, Option<SocksAddr>) = match r {
-                    Ok(r) => r,
-                    Err(SError::UDPSessionClosed(_)) => {
-                        continue;
-                    }
-                    Err(e) => {
-                        return Err(e);
-                    }
-                };
-
-                // Handle Fin frame
-                if udp.is_none() {
-                    trace!("UDP stream finished");
-                    continue;
-                }
-
-                let udp = udp.unwrap();
-                let addr = addr.unwrap();
-
-                // Batch receive and send for better throughput
-                tokio::spawn(async move {
-                    loop {
-                        // Use new UdpData frame for receiving
-                        let frame = match Frame::decode(&mut uni_stream).await {
-                            Ok(f) => f,
-                            Err(_) => break,
-                        };
-
-                        match frame {
-                            Frame::UdpData(udp_data) => {
-                                let payload = udp_data.payload;
-                                let _ = udp.send_to(payload, addr.clone()).await;
-                            }
-                            Frame::Fin => {
-                                trace!("UDP stream finished");
-                                break;
-                            }
-                            _ => break,
-                        }
-                    }
-                    Ok(()) as Result<(), SError>
-                }.in_current_span());
             }
-        }
+            Ok(()) as Result<(), SError>
+        });
     }
-    #[allow(unreachable_code)]
-    Ok(())
+}
+
+/// Handle UDP responses from server (client-side)
+/// This handles the data path: server -> uni stream -> client UDP socket
+pub async fn handle_udp_from_server<C: QuicConnection>(
+    conn: SQConn<C>,
+    udp_socket: AnyUdpSend,
+) -> Result<(), SError> {
+    info!("handle_udp_from_server: waiting for auth...");
+    wait_sunny_auth(&conn).await?;
+    info!("handle_udp_from_server: auth passed, entering main loop");
+
+    loop {
+        let (mut uni_stream, _id) = conn.accept_uni().await?;
+        info!("handle_udp_from_server: accepted uni stream, decoding frame");
+
+        let udp_socket_clone = udp_socket.clone();
+        tokio::spawn(async move {
+            loop {
+                let frame = match Frame::decode(&mut uni_stream).await {
+                    Ok(f) => f,
+                    Err(_) => break,
+                };
+
+                match frame {
+                    Frame::UdpData(udp_data) => {
+                        let payload = udp_data.payload;
+                        let dst = udp_data.dst.unwrap_or_else(|| SocksAddr::from_domain("0.0.0.0".to_string(), 0));
+                        info!("Client: received UDP from server: {} bytes to {}", payload.len(), dst);
+                        let _ = udp_socket_clone.send_to(payload, dst).await;
+                    }
+                    Frame::Fin => {
+                        trace!("UDP stream finished");
+                        break;
+                    }
+                    _ => break,
+                }
+            }
+            Ok(()) as Result<(), SError>
+        });
+    }
 }
 
 /// Optimized batch packet processor using LockFreeRingBuffer

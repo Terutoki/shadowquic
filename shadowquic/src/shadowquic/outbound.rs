@@ -15,7 +15,7 @@ use crate::{
 };
 
 use crate::squic::{
-    LockFreeIdTable, SQConn, handle_udp_packet_recv, id_store_optimized::UdpIdStore,
+    LockFreeIdTable, SQConn, id_store_optimized::UdpIdStore,
 };
 
 pub type ShadowQuicConn = SQConn<<EndClient as QuicClient>::C>;
@@ -76,12 +76,6 @@ impl ShadowQuicClient {
             lock_free_id_table: Arc::new(LockFreeIdTable::new(1024)),
         };
 
-        let conn_clone = conn.clone();
-        tokio::spawn(async move {
-            let _ = handle_udp_packet_recv(conn_clone)
-                .await
-                .map_err(|x| error!("handle udp packet recv error: {}", x));
-        });
         Ok(conn)
     }
 

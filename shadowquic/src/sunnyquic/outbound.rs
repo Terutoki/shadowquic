@@ -19,7 +19,7 @@ use crate::{
 };
 
 use crate::squic::{
-    LockFreeIdTable, SQConn, handle_udp_packet_recv, id_store_optimized::UdpIdStore,
+    LockFreeIdTable, SQConn, id_store_optimized::UdpIdStore,
 };
 
 pub type SunnyQuicConn = SQConn<<EndClient as QuicClient>::C>;
@@ -88,9 +88,6 @@ impl SunnyQuicClient {
             let _ = auth_sunny(&conn_clone, gen_sunny_user_hash(&username, &password))
                 .await
                 .map_err(|x| error!("authentication failed: {}", x));
-            let _ = handle_udp_packet_recv(conn_clone)
-                .await
-                .map_err(|x| error!("handle udp packet recv error: {}", x));
         });
         Ok(conn)
     }

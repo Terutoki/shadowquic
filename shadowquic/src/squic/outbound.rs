@@ -13,7 +13,7 @@ use crate::{
     msgs::frame::{ConnectReq, FastConnectReq, Frame, UdpAssociateReq},
     msgs::{SDecode, SEncode, encode_to_async, socks5::SocksAddr},
     quic::QuicConnection,
-    squic::{handle_udp_recv_ctrl, handle_udp_send},
+    squic::{handle_udp_recv_ctrl, handle_udp_send, handle_udp_from_server},
 };
 
 use super::{SQConn, inbound::Unsplit};
@@ -89,18 +89,31 @@ pub async fn handle_request<C: QuicConnection>(
                 Frame::UdpAssociate(req).encode(&mut send).await?;
                 info!("UDP ASSOCIATE request sent to upstream");
                 
+                // Clone UDP session components before moving into async blocks
+                let udp_send_clone = udp_session.send.clone();
+                let udp_recv_for_send = udp_session.recv;
+                
                 // Spawn handle_udp_recv_ctrl as background task - it reads from control stream
                 // which may close after UDP ASSOCIATE exchange
                 let conn_for_ctrl = conn.clone();
                 tokio::spawn(async move {
                     info!("Client: starting handle_udp_recv_ctrl task...");
-                    let result = handle_udp_recv_ctrl(recv, udp_session.send.clone(), conn_for_ctrl).await;
+                    let result = handle_udp_recv_ctrl(recv, udp_send_clone, conn_for_ctrl).await;
                     info!("Client: handle_udp_recv_ctrl finished: {:?}", result);
+                });
+                
+                // Spawn handle_udp_from_server to receive UDP responses from server via uni streams
+                let conn_for_server = conn.clone();
+                let udp_send_for_response = udp_session.send.clone();
+                tokio::spawn(async move {
+                    info!("Client: starting handle_udp_from_server task...");
+                    let result = handle_udp_from_server(conn_for_server, udp_send_for_response).await;
+                    info!("Client: handle_udp_from_server finished: {:?}", result);
                 });
                 
                 // Main task: handle_udp_send - send UDP data to upstream
                 let conn_for_send = conn.clone();
-                let fut1 = handle_udp_send(send, udp_session.recv, conn_for_send, over_stream);
+                let fut1 = handle_udp_send(send, udp_recv_for_send, conn_for_send, over_stream);
                 
                 // Control stream monitoring - spawn instead of join
                 let conn_for_ctrl2 = conn.clone();
