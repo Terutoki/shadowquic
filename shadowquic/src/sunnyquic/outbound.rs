@@ -18,7 +18,9 @@ use crate::{
     sunnyquic::gen_sunny_user_hash,
 };
 
-use crate::squic::{id_store_optimized::UdpIdStore, LockFreeIdTable, SQConn, handle_udp_packet_recv};
+use crate::squic::{
+    LockFreeIdTable, SQConn, handle_udp_packet_recv, id_store_optimized::UdpIdStore,
+};
 
 pub type SunnyQuicConn = SQConn<<EndClient as QuicClient>::C>;
 
@@ -69,11 +71,11 @@ impl SunnyQuicClient {
         let conn = QuicClient::connect(end, addr, &self.config.server_name).await?;
 
         let user_hash = gen_sunny_user_hash(&self.config.username, &self.config.password);
-        
+
         let conn = SQConn {
             conn,
             authed: Arc::new(SetOnce::new()),
-            auth_token: Arc::new(SetOnce::new_with(Some(user_hash))),  // 0-RTT: store token
+            auth_token: Arc::new(SetOnce::new_with(Some(user_hash))), // 0-RTT: store token
             send_id_counter: Arc::new(AtomicU16::new(1)),
             recv_id_store: Arc::new(UdpIdStore::new()),
             lock_free_id_table: Arc::new(LockFreeIdTable::new(1024)),

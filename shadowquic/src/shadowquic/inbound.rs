@@ -13,7 +13,7 @@ use crate::{
     squic::inbound::SQServerConn,
 };
 
-use crate::squic::{id_store_optimized::UdpIdStore, LockFreeIdTable, SQConn};
+use crate::squic::{LockFreeIdTable, SQConn, id_store_optimized::UdpIdStore};
 
 use super::quinn_wrapper::EndServer;
 use crate::quic::QuicServer;

@@ -6,10 +6,8 @@ use std::{
 use rustc_hash::FxHashMap;
 
 use bytes::{Bytes, BytesMut};
-use tokio::{
-    net::{TcpStream, lookup_host},
-};
 use parking_lot::RwLock;
+use tokio::net::{TcpStream, lookup_host};
 use tracing::{Instrument, error, trace, trace_span};
 
 use crate::{
@@ -134,16 +132,27 @@ impl DirectOut {
         Self { cfg }
     }
 
-    async fn handle_udp(&self, udp_session: UdpSession) -> Result<(), SError> {
-        trace!("associating udp to {}", udp_session.bind_addr);
-        let dst =
-            udp_session
-                .bind_addr
+    async fn handle_udp(&self, mut udp_session: UdpSession) -> Result<(), SError> {
+        let bind_addr = &udp_session.bind_addr;
+
+        let mut first_packet: Option<(Bytes, SocksAddr)> = None;
+        let dst = if bind_addr.is_unspecified() {
+            trace!("waiting for first UDP packet to determine destination");
+            let (buf, pkt_dst) = udp_session.recv.recv_from().await?;
+            let packet_dst = pkt_dst.clone();
+            first_packet = Some((buf, pkt_dst));
+            trace!("first UDP packet dst: {}", packet_dst);
+            packet_dst
                 .to_socket_addrs()?
                 .next()
-                .ok_or(SError::DomainResolveFailed(
-                    udp_session.bind_addr.to_string(),
-                ))?;
+                .ok_or(SError::DomainResolveFailed(packet_dst.to_string()))?
+        } else {
+            trace!("associating udp to {}", bind_addr);
+            bind_addr
+                .to_socket_addrs()?
+                .next()
+                .ok_or(SError::DomainResolveFailed(bind_addr.to_string()))?
+        };
         trace!("resolved to {}", dst);
         let ipv4_only = dst.is_ipv4();
 
@@ -175,6 +184,12 @@ impl DirectOut {
             (Ok(()) as Result<(), SError>)
         };
         let fut2 = async move {
+            // Send first packet if available
+            if let Some((first_buf, first_dst)) = first_packet {
+                trace!("sending first UDP packet to upstream");
+                let resolved_dst = dns_cache.resolve(first_dst, &dns_strategy).await?;
+                upstream_clone.send_to(&first_buf, &resolved_dst).await?;
+            }
             loop {
                 let (buf, dst) = downstream.recv_from().await?;
 

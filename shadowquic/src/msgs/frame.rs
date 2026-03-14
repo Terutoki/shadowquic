@@ -4,7 +4,7 @@ use bytes::{Buf, BufMut, Bytes, BytesMut};
 
 use crate::error::SError;
 
-use super::{socks5::SocksAddr, SDecode, SDecodeSync, SEncode, SEncodeSync};
+use super::{SDecode, SDecodeSync, SEncode, SEncodeSync, socks5::SocksAddr};
 use shadowquic_macros::{SDecode, SEncode};
 
 /// 标准QUIC VarInt实现，最大支持2^62-1

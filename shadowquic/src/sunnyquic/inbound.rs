@@ -18,7 +18,7 @@ use crate::{
     sunnyquic::EndServer,
 };
 
-use crate::squic::{id_store_optimized::UdpIdStore, LockFreeIdTable, SQConn};
+use crate::squic::{LockFreeIdTable, SQConn, id_store_optimized::UdpIdStore};
 
 use crate::quic::QuicServer;
 pub struct SunnyQuicServer {

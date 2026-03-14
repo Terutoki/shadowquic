@@ -1,5 +1,5 @@
-use std::{net::SocketAddr, sync::Arc, sync::OnceLock};
 use std::net::ToSocketAddrs;
+use std::{net::SocketAddr, sync::Arc, sync::OnceLock};
 
 use async_trait::async_trait;
 use bytes::{Buf, BufMut, Bytes, BytesMut};

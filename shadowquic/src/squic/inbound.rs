@@ -13,11 +13,11 @@ use tracing::{Instrument, Level, event, info, trace, trace_span};
 use crate::{
     ProxyRequest, TcpSession, TcpTrait, UdpSession,
     error::SError,
-    msgs::frame::{ClientHello, ConnectReq, FastConnectReq, Frame, ServerHello, UdpAssociateReq, ERROR_OK, FEATURE_UDP},
-    msgs::{
-        SDecode, SEncode,
-        socks5::SocksAddr,
+    msgs::frame::{
+        ClientHello, ConnectReq, ERROR_OK, FEATURE_UDP, FastConnectReq, Frame, ServerHello,
+        UdpAssociateReq,
     },
+    msgs::{SDecode, SEncode, socks5::SocksAddr},
     quic::QuicConnection,
     squic::wait_sunny_auth,
 };
@@ -83,7 +83,7 @@ impl<C: QuicConnection> SQServerConn<C> {
             Frame::FastConnect(req) => {
                 if let Some(name) = users.get(&req.auth_token) {
                     tracing::info!("FastConnect user authenticated:{}", name);
-                    
+
                     // 发送FastConnectAck响应
                     use crate::msgs::frame::FastConnectAck;
                     let ack = FastConnectAck {
@@ -93,9 +93,9 @@ impl<C: QuicConnection> SQServerConn<C> {
                         extensions: vec![],
                     };
                     Frame::FastConnectAck(ack).encode(&mut send).await?;
-                    
+
                     inner.authed.set(true).expect("repeated authentication!");
-                    
+
                     // 直接开始数据转发
                     let tcp: TcpSession = TcpSession {
                         stream: Box::new(Unsplit { s: send, r: recv }),
@@ -106,7 +106,7 @@ impl<C: QuicConnection> SQServerConn<C> {
                         .send(ProxyRequest::Tcp(tcp))
                         .await
                         .map_err(|_| SError::OutboundUnavailable)?;
-                    
+
                     // 注意：每个bistream只能处理一个TCP连接
                 } else {
                     tracing::error!("FastConnect authentication failed");
@@ -120,10 +120,10 @@ impl<C: QuicConnection> SQServerConn<C> {
                     inner.close(263, &[]);
                     return Err(SError::ProtocolViolation);
                 }
-                
+
                 if let Some(name) = users.get(&hello.auth_token) {
                     tracing::info!("user authenticated:{}", name);
-                    
+
                     // 发送ServerHello响应
                     let server_hello = ServerHello {
                         version: 1,
@@ -132,9 +132,9 @@ impl<C: QuicConnection> SQServerConn<C> {
                         extensions: vec![],
                     };
                     Frame::ServerHello(server_hello).encode(&mut send).await?;
-                    
+
                     inner.authed.set(true).expect("repeated authentication!");
-                    
+
                     // 握手完成后，继续等待后续请求（支持多路复用）
                     let frame = Frame::decode(&mut recv).await?;
                     match frame {
@@ -144,7 +144,7 @@ impl<C: QuicConnection> SQServerConn<C> {
                                 inner.remote_address(),
                                 req.dst
                             );
-                            
+
                             // 直接开始数据转发，无需发送确认
                             let tcp: TcpSession = TcpSession {
                                 stream: Box::new(Unsplit { s: send, r: recv }),
@@ -155,7 +155,7 @@ impl<C: QuicConnection> SQServerConn<C> {
                                 .send(ProxyRequest::Tcp(tcp))
                                 .await
                                 .map_err(|_| SError::OutboundUnavailable)?;
-                            
+
                             // 注意：每个bistream只能处理一个TCP连接
                             // 多路复用需要新建bistream
                         }
@@ -181,7 +181,7 @@ impl<C: QuicConnection> SQServerConn<C> {
                     inner.remote_address(),
                     req.dst
                 );
-                
+
                 // 直接开始数据转发，无需发送确认
                 let tcp: TcpSession = TcpSession {
                     stream: Box::new(Unsplit { s: send, r: recv }),
@@ -195,7 +195,7 @@ impl<C: QuicConnection> SQServerConn<C> {
             }
             Frame::UdpAssociate(req) => {
                 wait_sunny_auth(&inner).await?;
-                let dst = req.dst.ok_or(SError::ProtocolViolation)?;
+                let dst = req.dst.unwrap_or_else(SocksAddr::unspecified);
                 info!("association request to {} accepted", dst);
 
                 // Use larger channel buffer for better throughput

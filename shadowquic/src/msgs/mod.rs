@@ -8,10 +8,10 @@ use crate::error::SError;
 #[cfg(test)]
 mod socks5_addr_test;
 
-pub mod socks5;
-pub mod squic;
 pub mod frame;
 pub mod framed;
+pub mod socks5;
+pub mod squic;
 
 pub use framed::Framed;
 

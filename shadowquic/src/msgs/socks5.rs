@@ -249,6 +249,21 @@ impl SocksAddr {
             port,
         }
     }
+
+    pub fn unspecified() -> Self {
+        SocksAddr {
+            addr: AddrOrDomain::V4([0, 0, 0, 0]),
+            port: 0,
+        }
+    }
+
+    pub fn is_unspecified(&self) -> bool {
+        match self.addr {
+            AddrOrDomain::V4(v) => v == [0, 0, 0, 0] && self.port == 0,
+            AddrOrDomain::V6(v) => v.iter().all(|&x| x == 0) && self.port == 0,
+            AddrOrDomain::Domain(ref v) => v.contents.iter().all(|&x| x == 0) && self.port == 0,
+        }
+    }
 }
 impl fmt::Display for SocksAddr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {

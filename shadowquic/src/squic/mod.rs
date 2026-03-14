@@ -27,7 +27,7 @@ use crate::utils::memory_pool::{
 use crate::{
     AnyUdpRecv, AnyUdpSend,
     error::{SError, SResult},
-    msgs::frame::{ClientHello, ConnectReq, Frame, ServerHello, UdpData, ERROR_OK, FEATURE_UDP},
+    msgs::frame::{ClientHello, ConnectReq, ERROR_OK, FEATURE_UDP, Frame, ServerHello, UdpData},
     msgs::{
         SDecode, SDecodeSync, SEncode, SEncodeSync, decode_to_async, encode_to_async,
         socks5::SocksAddr,
@@ -39,8 +39,8 @@ pub mod id_store_optimized;
 pub mod inbound;
 pub mod outbound;
 
-pub use id_store_optimized::{LockFreeIdTable, UdpIdStore};
 pub use self::inbound::SunnyQuicUsers;
+pub use id_store_optimized::{LockFreeIdTable, UdpIdStore};
 
 /// SQuic connection, it is shared by sunnyquic and shadowquic and is a wrapper of quic connection.
 /// It contains a connection object and two ID store for managing UDP sockets.
@@ -49,9 +49,9 @@ pub use self::inbound::SunnyQuicUsers;
 pub struct SQConn<T: QuicConnection> {
     pub(crate) conn: T,
     pub(crate) authed: Arc<SetOnce<bool>>,
-    pub(crate) auth_token: Arc<SetOnce<[u8; 64]>>,  // 0-RTT auth token
-    pub(crate) send_id_counter: Arc<AtomicU16>,  // Lock-free ID counter
-    pub(crate) recv_id_store: Arc<UdpIdStore>,    // Lock-free UDP socket store
+    pub(crate) auth_token: Arc<SetOnce<[u8; 64]>>, // 0-RTT auth token
+    pub(crate) send_id_counter: Arc<AtomicU16>,    // Lock-free ID counter
+    pub(crate) recv_id_store: Arc<UdpIdStore>,     // Lock-free UDP socket store
     pub(crate) lock_free_id_table: Arc<LockFreeIdTable>,
 }
 
@@ -72,7 +72,7 @@ pub(crate) async fn auth_sunny<T: QuicConnection>(
 ) -> SResult<()> {
     if conn.authed.get().is_none() {
         let (mut send, mut recv, _id) = conn.open_bi().await?;
-        
+
         // 发送ClientHello进行握手
         let hello = ClientHello {
             version: 1,
@@ -82,12 +82,15 @@ pub(crate) async fn auth_sunny<T: QuicConnection>(
         };
         Frame::ClientHello(hello).encode(&mut send).await?;
         debug!("ClientHello sent");
-        
+
         // 接收ServerHello
         let frame = Frame::decode(&mut recv).await?;
         match frame {
             Frame::ServerHello(server_hello) => {
-                debug!("ServerHello received, connection ID: {}", server_hello.connection_id);
+                debug!(
+                    "ServerHello received, connection ID: {}",
+                    server_hello.connection_id
+                );
                 if server_hello.version != 1 {
                     return Err(SError::ProtocolViolation);
                 }
@@ -97,7 +100,7 @@ pub(crate) async fn auth_sunny<T: QuicConnection>(
                 return Err(SError::SunnyAuthError("Protocol error".into()));
             }
         }
-        
+
         conn.authed.set(true).expect("repeated authentication");
     }
     Ok(())
@@ -138,7 +141,10 @@ impl<W: AsyncWrite> AssociateSendSession<W> {
 impl<W: AsyncWrite> Drop for AssociateSendSession<W> {
     fn drop(&mut self) {
         // No global cleanup needed - IDs are tracked locally in dst_map
-        trace!("AssociateSendSession dropped, {} ids cleaned", self.dst_map.len());
+        trace!(
+            "AssociateSendSession dropped, {} ids cleaned",
+            self.dst_map.len()
+        );
     }
 }
 
@@ -172,7 +178,10 @@ impl Drop for AssociateRecvSession {
             self.id_store.remove(*id);
             self.lock_free_table.remove(*id);
         }
-        trace!("AssociateRecvSession dropped, {} ids cleaned", self.id_map.len());
+        trace!(
+            "AssociateRecvSession dropped, {} ids cleaned",
+            self.id_map.len()
+        );
     }
 }
 
@@ -214,10 +223,10 @@ pub async fn handle_udp_send<C: QuicConnection>(
                     e.insert(uni)
                 }
             };
-            
+
             // Clear header buffer before encoding
             header_buf.clear();
-            
+
             // Use new UdpData frame
             let udp_data = UdpData {
                 dst: if is_new { Some(dst.clone()) } else { None },
@@ -229,16 +238,14 @@ pub async fn handle_udp_send<C: QuicConnection>(
         } else {
             // Datagram path - use new UdpData frame
             let mut frame_buf = BytesMut::new();
-            
+
             let udp_data = UdpData {
                 dst: if is_new { Some(dst.clone()) } else { None },
                 payload: bytes,
             };
             Frame::UdpData(udp_data).encode_sync(&mut frame_buf);
-            
-            quic_conn
-                .send_datagram(frame_buf.freeze())
-                .await?;
+
+            quic_conn.send_datagram(frame_buf.freeze()).await?;
         }
     }
 }
@@ -262,12 +269,14 @@ pub async fn handle_udp_recv_ctrl<C: QuicConnection>(
         match frame {
             Frame::UdpData(udp_data) => {
                 let dst = udp_data.dst.clone();
-                
+
                 if let Some(ref dst) = dst {
                     let id = rand::random::<u16>();
                     trace!("udp data received with dst: {}, assigning id:{}", dst, id);
-                    session.store_socket(id, dst.clone(), udp_socket.clone()).await;
-                    
+                    session
+                        .store_socket(id, dst.clone(), udp_socket.clone())
+                        .await;
+
                     // 发送UDP数据到channel (UdpSession.recv)
                     // dst是目标地址，payload是数据
                     let _ = udp_socket.send_to(udp_data.payload, dst.clone()).await;
@@ -334,7 +343,7 @@ pub async fn handle_udp_packet_recv<C: QuicConnection>(conn: SQConn<C>) -> Resul
             r = async {
                 let (mut uni_stream, _id) = conn.accept_uni().await?;
                 trace!("unistream accepted");
-                
+
                 // Use new UdpData frame
                 let frame = Frame::decode(&mut uni_stream).await?;
                 let (id, dst) = match frame {
@@ -347,12 +356,12 @@ pub async fn handle_udp_packet_recv<C: QuicConnection>(conn: SQConn<C>) -> Resul
                     }
                     _ => return Err(SError::ProtocolViolation),
                 };
-                
+
                 event!(Level::TRACE, "resolving datagram id:{}",id);
 
                 // Use lock-free UdpIdStore
                 let result = id_store.get_or_create(id).await;
-                
+
                 match result {
                     Ok((udp, addr)) => {
                         info!("udp over stream: id:{}: {}->{}",id, conn.remote_address(), addr);
@@ -392,7 +401,7 @@ pub async fn handle_udp_packet_recv<C: QuicConnection>(conn: SQConn<C>) -> Resul
                             Ok(f) => f,
                             Err(_) => break,
                         };
-                        
+
                         match frame {
                             Frame::UdpData(udp_data) => {
                                 let payload = udp_data.payload;

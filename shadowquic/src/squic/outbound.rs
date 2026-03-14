@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use std::sync::Arc;
 use tokio::sync::mpsc::{Receiver, Sender, channel};
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 
 use tokio::io::AsyncReadExt;
 use tracing::Instrument;
@@ -11,7 +11,7 @@ use crate::{
     ProxyRequest,
     error::SError,
     msgs::frame::{ConnectReq, FastConnectReq, Frame, UdpAssociateReq},
-    msgs::{encode_to_async, SDecode, SEncode, socks5::SocksAddr},
+    msgs::{SDecode, SEncode, encode_to_async, socks5::SocksAddr},
     quic::QuicConnection,
     squic::{handle_udp_recv_ctrl, handle_udp_send},
 };
@@ -28,12 +28,12 @@ pub async fn handle_request<C: QuicConnection>(
     let fut = async move {
         // 获取认证信息（如果有的话）
         let auth_token = conn.auth_token.get().cloned();
-        
+
         match req {
             crate::ProxyRequest::Tcp(mut tcp_session) => {
                 let dst = tcp_session.dst.clone();
                 debug!("bistream opened for tcp dst:{}", dst);
-                
+
                 // 0-RTT: 使用FastConnect合并认证+连接
                 if let Some(token) = auth_token {
                     let req = FastConnectReq {
@@ -43,7 +43,7 @@ pub async fn handle_request<C: QuicConnection>(
                     };
                     Frame::FastConnect(req).encode(&mut send).await?;
                     trace!("FastConnect (0-RTT) sent");
-                    
+
                     // 等待FastConnectAck响应
                     let ack = Frame::decode(&mut recv).await?;
                     trace!("FastConnectAck received: {:?}", ack);
@@ -55,7 +55,7 @@ pub async fn handle_request<C: QuicConnection>(
                     };
                     Frame::Connect(req).encode(&mut send).await?;
                     trace!("tcp connect req header sent");
-                    
+
                     // 尝试非阻塞读取并丢弃可能的ConnectAck
                     // Server可能不发送ConnectAck，超时则忽略
                     match timeout(Duration::from_millis(0), Frame::decode(&mut recv)).await {

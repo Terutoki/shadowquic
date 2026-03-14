@@ -87,7 +87,10 @@ pub struct ConnectionState<C> {
 
 impl<C> ConnectionState<C> {
     fn new(conn: C, remote_addr: SocketAddr) -> Self {
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64;
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
         Self {
             conn: RwLock::new(Some(conn)),
             in_use: AtomicBool::new(false),
@@ -111,7 +114,10 @@ impl<C> ConnectionState<C> {
 
     #[inline]
     pub fn release(&self) {
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64;
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
         self.last_used.store(now, Ordering::Release);
         self.in_use.store(false, Ordering::Release);
     }
@@ -119,7 +125,10 @@ impl<C> ConnectionState<C> {
     pub fn is_expired(&self, config: &PoolConfig) -> bool {
         let idle = self.last_used.load(Ordering::Acquire);
         let in_use = self.in_use.load(Ordering::Acquire);
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64;
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
 
         !in_use && (now - idle) > config.idle_timeout.as_millis() as u64
     }
@@ -206,7 +215,10 @@ impl<C: QuicConnection> ConnectionShard<C> {
             let connections = self.connections.read();
             if let Some(state) = connections.get(&addr) {
                 if state.try_acquire() {
-                    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64;
+                    let now = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap()
+                        .as_millis() as u64;
                     state.last_used.store(now, Ordering::Release);
                     self.stats
                         .connection_acquires
@@ -236,7 +248,10 @@ impl<C: QuicConnection> ConnectionShard<C> {
         // 双重检查：连接可能在创建期间已被其他线程插入
         if let Some(state) = connections.get(&addr) {
             if state.try_acquire() {
-                let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64;
+                let now = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_millis() as u64;
                 state.last_used.store(now, Ordering::Release);
                 return Ok(Arc::clone(state));
             }

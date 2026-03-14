@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use crate::squic::SunnyCredential;
 use crate::msgs::squic::SUNNY_QUIC_AUTH_LEN;
+use crate::squic::SunnyCredential;
 
 pub mod inbound;
 pub mod outbound;

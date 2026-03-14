@@ -34,8 +34,7 @@ impl<T: AsyncRead + Unpin> Framed<T> {
                 if self.read_buf.len() >= total_len {
                     // 有足够的数据
                     let mut frame_data = self.read_buf.split_to(total_len).freeze();
-                    return Frame::decode_sync(&mut frame_data)
-                        .ok_or(SError::ProtocolViolation);
+                    return Frame::decode_sync(&mut frame_data).ok_or(SError::ProtocolViolation);
                 }
             }
 
@@ -49,9 +48,13 @@ impl<T: AsyncRead + Unpin> Framed<T> {
             }
         }
     }
-    
+
     /// 写入一个帧
-    pub async fn write_frame<W: AsyncWrite + Unpin>(&mut self, frame: &Frame, w: &mut W) -> Result<(), SError> {
+    pub async fn write_frame<W: AsyncWrite + Unpin>(
+        &mut self,
+        frame: &Frame,
+        w: &mut W,
+    ) -> Result<(), SError> {
         self.write_buf.clear();
         frame.encode_sync(&mut self.write_buf);
         w.write_all(&self.write_buf).await?;
@@ -59,16 +62,16 @@ impl<T: AsyncRead + Unpin> Framed<T> {
     }
 
     /// 写入一个帧（同步版本，使用内部缓冲区）
-    pub async fn write_frame_sync<W: AsyncWrite + Unpin>(&mut self, frame: &Frame, w: &mut W) -> Result<(), SError> {
+    pub async fn write_frame_sync<W: AsyncWrite + Unpin>(
+        &mut self,
+        frame: &Frame,
+        w: &mut W,
+    ) -> Result<(), SError> {
         let mut buf = BytesMut::new();
         frame.encode_sync(&mut buf);
         w.write_all(&buf).await?;
         Ok(())
     }
-
-
-
-
 
     /// 拆分解包，返回底层IO
     pub fn into_inner(self) -> T {
