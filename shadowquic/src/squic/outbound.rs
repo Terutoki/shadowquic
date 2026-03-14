@@ -79,12 +79,15 @@ pub async fn handle_request<C: QuicConnection>(
             }
             crate::ProxyRequest::Udp(udp_session) => {
                 let bind_addr = udp_session.bind_addr.clone();
+                info!("ShadowQUIC outbound: UDP request, bind_addr: {}", bind_addr);
                 info!("bistream opened for udp dst:{}", bind_addr);
                 let req = UdpAssociateReq {
                     dst: Some(udp_session.bind_addr),
                     extensions: vec![],
                 };
+                info!("Sending UDP ASSOCIATE request to upstream...");
                 Frame::UdpAssociate(req).encode(&mut send).await?;
+                info!("UDP ASSOCIATE request sent to upstream");
                 trace!("udp associate req header sent");
                 let fut2 = handle_udp_recv_ctrl(recv, udp_session.send.clone(), conn.clone());
                 let fut1 = handle_udp_send(send, udp_session.recv, conn, over_stream);

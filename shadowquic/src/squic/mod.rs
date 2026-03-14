@@ -208,7 +208,9 @@ pub async fn handle_udp_send<C: QuicConnection>(
     let mut stack_buf = [0u8; 256];
 
     loop {
+        info!("handle_udp_send: waiting for data from downstream...");
         let (bytes, dst) = down_stream.recv_from().await?;
+        info!("handle_udp_send: got {} bytes to {}", bytes.len(), dst);
         STATS.packet_sent(bytes.len());
 
         let (id, is_new) = session.get_id_or_insert(&dst).await;
@@ -258,14 +260,17 @@ pub async fn handle_udp_recv_ctrl<C: QuicConnection>(
     udp_socket: AnyUdpSend,
     conn: SQConn<C>,
 ) -> Result<(), SError> {
+    info!("handle_udp_recv_ctrl: started, waiting for upstream data...");
     let mut session = AssociateRecvSession {
         id_store: conn.recv_id_store.clone(),
         id_map: HashMap::with_capacity_and_hasher(16, FxBuildHasher),
         lock_free_table: conn.lock_free_id_table.clone(),
     };
     loop {
+        info!("handle_udp_recv_ctrl: waiting for frame from upstream...");
         // Use new UdpData frame for control
         let frame = Frame::decode(&mut recv).await?;
+        info!("handle_udp_recv_ctrl: got frame: {:?}", std::mem::discriminant(&frame));
         match frame {
             Frame::UdpData(udp_data) => {
                 let dst = udp_data.dst.clone();
