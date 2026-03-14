@@ -344,7 +344,9 @@ pub async fn handle_udp_packet_recv<C: QuicConnection>(conn: SQConn<C>) -> Resul
         }
     }
     STATS.connection_opened();
+    info!("handle_udp_packet_recv: entering main loop");
     loop {
+        info!("handle_udp_packet_recv: waiting for event...");
         tokio::select! {
             b = conn.read_datagram() => {
                 let b = b?;
