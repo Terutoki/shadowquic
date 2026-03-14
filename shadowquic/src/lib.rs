@@ -9,7 +9,7 @@ use tokio::net::TcpStream;
 use anyhow::Result;
 use async_trait::async_trait;
 use tokio::sync::mpsc::{Receiver, Sender};
-use tracing::error;
+use tracing::{error, info, warn};
 
 pub mod config;
 pub mod direct;
@@ -112,11 +112,16 @@ impl UdpSend for Sender<(Bytes, SocksAddr)> {
 #[async_trait]
 impl UdpRecv for Receiver<(Bytes, SocksAddr)> {
     async fn recv_from(&mut self) -> Result<(Bytes, SocksAddr), SError> {
-        let r = self.recv().await.ok_or_else(|| {
-            tracing::warn!("UDP channel closed, returning OutboundUnavailable");
-            SError::OutboundUnavailable
-        })?;
-        Ok(r)
+        tracing::info!("Receiver::recv_from called, waiting for data...");
+        let r = self.recv().await;
+        tracing::info!("Receiver::recv_from got: {:?}", r.is_some());
+        match r {
+            Some(data) => Ok(data),
+            None => {
+                tracing::warn!("UDP channel closed (recv returned None), returning OutboundUnavailable");
+                Err(SError::OutboundUnavailable)
+            }
+        }
     }
 }
 pub struct Manager {
@@ -127,16 +132,23 @@ pub struct Manager {
 impl Manager {
     pub async fn run(self) -> Result<(), SError> {
         self.inbound.init().await?;
+        tracing::info!("Inbound initialized, starting main loop");
         let mut inbound = self.inbound;
         let mut outbound = self.outbound;
         loop {
+            tracing::info!("Waiting for inbound request...");
             match inbound.accept().await {
-                Ok(req) => match outbound.handle(req).await {
-                    Ok(_) => {}
-                    Err(e) => {
-                        error!("error during handling request: {}", e)
+                Ok(req) => {
+                    tracing::info!("Received request");
+                    match outbound.handle(req).await {
+                        Ok(_) => {
+                            tracing::info!("Request handled successfully");
+                        }
+                        Err(e) => {
+                            error!("error during handling request: {}", e)
+                        }
                     }
-                },
+                }
                 Err(e) => {
                     error!("error during accepting request: {}", e)
                 }
