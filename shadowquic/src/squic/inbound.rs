@@ -221,7 +221,8 @@ impl<C: QuicConnection> SQServerConn<C> {
                 }
                 info!("ShadowQUIC server: UDP request sent to outbound");
 
-                // Also need to spawn handle_udp_packet_recv to receive unidirectional streams from client
+                // Spawn handle_udp_packet_recv to receive unidirectional streams from client
+                // This handles the actual UDP data from the client
                 let conn_for_packet = inner.clone();
                 tokio::spawn(async move {
                     info!("ShadowQUIC server: starting handle_udp_packet_recv task...");
@@ -229,10 +230,20 @@ impl<C: QuicConnection> SQServerConn<C> {
                     info!("ShadowQUIC server: handle_udp_packet_recv finished: {:?}", result);
                 });
 
+                // Spawn handle_udp_recv_ctrl as background task - it reads from control stream
+                // which may close after UDP ASSOCIATE exchange, but that shouldn't affect the connection
+                let conn_for_ctrl = inner.clone();
+                tokio::spawn(async move {
+                    info!("ShadowQUIC server: starting handle_udp_recv_ctrl task...");
+                    let result = handle_udp_recv_ctrl(recv, local_send, conn_for_ctrl).await;
+                    info!("ShadowQUIC server: handle_udp_recv_ctrl finished: {:?}", result);
+                });
+
                 info!("ShadowQUIC server: starting UDP relay tasks...");
+                // Only join on handle_udp_send - forward data from client to direct outbound
+                // This is the main task that needs to run
                 let fut1 = handle_udp_send(send, Box::new(local_recv), inner.clone(), over_stream);
-                let fut2 = handle_udp_recv_ctrl(recv, local_send, inner);
-                tokio::try_join!(fut1, fut2)?;
+                tokio::try_join!(fut1)?;
                 info!("ShadowQUIC server: UDP relay finished");
             }
             _ => {

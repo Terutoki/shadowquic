@@ -88,29 +88,36 @@ pub async fn handle_request<C: QuicConnection>(
                 info!("Sending UDP ASSOCIATE request to upstream...");
                 Frame::UdpAssociate(req).encode(&mut send).await?;
                 info!("UDP ASSOCIATE request sent to upstream");
-                trace!("udp associate req header sent");
-                let fut2 = handle_udp_recv_ctrl(recv, udp_session.send.clone(), conn.clone());
-                let fut1 = handle_udp_send(send, udp_session.recv, conn, over_stream);
-                // control stream, in socks5 inbound, end of control stream
-                // means end of udp association.
-                let fut3 = async {
-                    if udp_session.stream.is_none() {
-                        return Ok(());
+                
+                // Spawn handle_udp_recv_ctrl as background task - it reads from control stream
+                // which may close after UDP ASSOCIATE exchange
+                let conn_for_ctrl = conn.clone();
+                tokio::spawn(async move {
+                    info!("Client: starting handle_udp_recv_ctrl task...");
+                    let result = handle_udp_recv_ctrl(recv, udp_session.send.clone(), conn_for_ctrl).await;
+                    info!("Client: handle_udp_recv_ctrl finished: {:?}", result);
+                });
+                
+                // Main task: handle_udp_send - send UDP data to upstream
+                let conn_for_send = conn.clone();
+                let fut1 = handle_udp_send(send, udp_session.recv, conn_for_send, over_stream);
+                
+                // Control stream monitoring - spawn instead of join
+                let conn_for_ctrl2 = conn.clone();
+                let mut ctrl_stream = udp_session.stream;
+                tokio::spawn(async move {
+                    if ctrl_stream.is_none() {
+                        return;
                     }
+                    info!("Client: monitoring control stream...");
                     let mut buf = [0u8];
-                    udp_session
-                        .stream
-                        .unwrap()
-                        .read_exact(&mut buf)
-                        .await
-                        .map_err(|x| SError::UDPSessionClosed(x.to_string()))?;
-                    error!("unexpected data received from socks control stream");
-                    Err(SError::UDPSessionClosed(
-                        "unexpected data received from socks control stream".into(),
-                    )) as Result<(), SError>
-                };
-
-                tokio::try_join!(fut1, fut2, fut3)?;
+                    match ctrl_stream.unwrap().read_exact(&mut buf).await {
+                        Ok(_) => info!("Client: control stream closed normally"),
+                        Err(e) => info!("Client: control stream error: {}", e),
+                    }
+                });
+                
+                tokio::try_join!(fut1)?;
                 info!("udp association to {} ended", bind_addr);
             }
         }
