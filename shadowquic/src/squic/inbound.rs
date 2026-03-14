@@ -221,6 +221,14 @@ impl<C: QuicConnection> SQServerConn<C> {
                 }
                 info!("ShadowQUIC server: UDP request sent to outbound");
 
+                // Also need to spawn handle_udp_packet_recv to receive unidirectional streams from client
+                let conn_for_packet = inner.clone();
+                tokio::spawn(async move {
+                    info!("ShadowQUIC server: starting handle_udp_packet_recv task...");
+                    let result = crate::squic::handle_udp_packet_recv(conn_for_packet).await;
+                    info!("ShadowQUIC server: handle_udp_packet_recv finished: {:?}", result);
+                });
+
                 info!("ShadowQUIC server: starting UDP relay tasks...");
                 let fut1 = handle_udp_send(send, Box::new(local_recv), inner.clone(), over_stream);
                 let fut2 = handle_udp_recv_ctrl(recv, local_send, inner);
