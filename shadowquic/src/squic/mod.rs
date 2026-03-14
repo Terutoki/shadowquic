@@ -331,10 +331,18 @@ pub async fn handle_udp_recv_ctrl<C: QuicConnection>(
 /// Handle udp packet receive task - OPTIMIZED
 /// Uses lock-free lookup first for maximum performance
 pub async fn handle_udp_packet_recv<C: QuicConnection>(conn: SQConn<C>) -> Result<(), SError> {
+    info!("handle_udp_packet_recv: started, waiting for auth...");
     let id_store = conn.recv_id_store.clone();
     let lock_free_table = conn.lock_free_id_table.clone();
 
-    wait_sunny_auth(&conn).await?;
+    let auth_result = wait_sunny_auth(&conn).await;
+    match auth_result {
+        Ok(()) => info!("handle_udp_packet_recv: auth passed"),
+        Err(e) => {
+            error!("handle_udp_packet_recv: auth failed: {}", e);
+            return Err(e);
+        }
+    }
     STATS.connection_opened();
     loop {
         tokio::select! {
