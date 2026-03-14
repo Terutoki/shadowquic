@@ -275,8 +275,21 @@ pub async fn handle_udp_recv_ctrl<C: QuicConnection>(
     };
     loop {
         info!("handle_udp_recv_ctrl: waiting for frame from upstream...");
-        // Use new UdpData frame for control
-        let frame = Frame::decode(&mut recv).await?;
+        let frame = tokio::time::timeout(std::time::Duration::from_secs(5), Frame::decode(&mut recv)).await;
+        let frame = match frame {
+            Ok(Ok(f)) => {
+                info!("handle_udp_recv_ctrl: got frame");
+                f
+            }
+            Ok(Err(e)) => {
+                error!("handle_udp_recv_ctrl: frame decode error: {}", e);
+                break;
+            }
+            Err(_) => {
+                warn!("handle_udp_recv_ctrl: timeout waiting for frame, continuing...");
+                continue;
+            }
+        };
         info!("handle_udp_recv_ctrl: got frame: {:?}", std::mem::discriminant(&frame));
         match frame {
             Frame::UdpData(udp_data) => {
