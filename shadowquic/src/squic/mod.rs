@@ -12,7 +12,7 @@ use rustc_hash::{FxBuildHasher, FxHashMap};
 use tokio::{
     io::{AsyncReadExt, AsyncWrite, AsyncWriteExt},
     sync::{
-        RwLock, SetOnce,
+        SetOnce,
         watch::{Receiver, Sender, channel},
     },
 };
@@ -108,102 +108,6 @@ impl<T: QuicConnection> Deref for SQConn<T> {
 
     fn deref(&self) -> &Self::Target {
         &self.conn
-    }
-}
-
-// Use watch channel here. Notify is not suitable here
-// see https://github.com/tokio-rs/tokio/issues/3757
-type IDStoreVal<T> = Result<T, Sender<()>>;
-
-/// IDStore is a thread-safe store for managing UDP sockets and their associated ids.
-/// It uses a HashMap to store the mapping between ids and the destination addresses as well as associated sockets.
-/// It also uses an atomic counter to generate unique ids for new sockets.
-#[derive(Clone)]
-pub(crate) struct IDStore<T = (AnyUdpSend, SocksAddr)> {
-    pub(crate) inner: Arc<RwLock<FxHashMap<u16, IDStoreVal<T>>>>,
-}
-
-impl<T> Default for IDStore<T> {
-    fn default() -> Self {
-        Self {
-            inner: Arc::new(RwLock::new(HashMap::with_capacity_and_hasher(
-                64,
-                FxBuildHasher,
-            ))),
-        }
-    }
-}
-
-impl<T> IDStore<T>
-where
-    T: Clone,
-{
-    async fn get_socket_or_notify(&self, id: u16) -> Result<T, Receiver<()>> {
-        if let Some(r) = self.inner.read().await.get(&id) {
-            r.clone().map_err(|x| x.subscribe())
-        } else {
-            match self.inner.write().await.entry(id) {
-                Entry::Occupied(occupied_entry) => {
-                    occupied_entry.get().clone().map_err(|x| x.subscribe())
-                }
-                Entry::Vacant(vacant_entry) => {
-                    let (s, r) = channel(());
-                    vacant_entry.insert(Err(s));
-                    Err(r)
-                }
-            }
-        }
-    }
-    async fn try_get_socket(&self, id: u16) -> Option<T> {
-        if let Some(r) = self.inner.read().await.get(&id) {
-            match r {
-                Ok(s) => Some(s.clone()),
-                Err(_) => None,
-            }
-        } else {
-            None
-        }
-    }
-    async fn get_socket_or_wait(&self, id: u16) -> Result<T, SError> {
-        match self.get_socket_or_notify(id).await {
-            Ok(r) => Ok(r),
-            Err(mut n) => {
-                n.changed()
-                    .await
-                    .map_err(|_| SError::UDPSessionClosed(String::from("notify sender dropped")))?;
-                let ret = self
-                    .try_get_socket(id)
-                    .await
-                    .ok_or(SError::UDPSessionClosed(String::from("UDP session closed")))?;
-                Ok(ret)
-            }
-        }
-    }
-    async fn store_socket(&self, id: u16, val: T) {
-        let mut h = self.inner.write().await;
-        trace!("receiving side alive socket number: {}", h.len());
-        let r = h.get_mut(&id);
-        if let Some(s) = r {
-            match s {
-                Ok(_) => {
-                    error!("id:{} already exists", id);
-                }
-                Err(_) => {
-                    let notify = replace(s, Ok(val));
-                    match notify {
-                        Ok(_) => {
-                            panic!("should be notify");
-                        }
-                        Err(n) => {
-                            n.send(()).unwrap();
-                            event!(Level::TRACE, "notify socket id:{}", id);
-                        }
-                    }
-                }
-            }
-        } else {
-            h.insert(id, Ok(val));
-        }
     }
 }
 
