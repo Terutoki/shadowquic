@@ -32,11 +32,8 @@ impl UdpSocksWrap {
             expect_header,
         }
     }
-}
 
-#[async_trait]
-impl UdpRecv for UdpSocksWrap {
-    async fn recv_from(&mut self) -> Result<(Bytes, SocksAddr), SError> {
+    pub async fn recv_from(&mut self) -> Result<(Bytes, SocksAddr), SError> {
         let mut buf = fast_alloc(2000);
         buf.resize(2000, 0);
 
@@ -60,10 +57,8 @@ impl UdpRecv for UdpSocksWrap {
             Ok((buf.slice(..len), dst.into()))
         }
     }
-}
-#[async_trait]
-impl UdpSend for UdpSocksWrap {
-    async fn send_to(&self, buf: Bytes, addr: SocksAddr) -> Result<usize, SError> {
+
+    pub async fn send_to(&self, buf: Bytes, addr: SocksAddr) -> Result<usize, SError> {
         if self.expect_header {
             let reply = UdpReqHeader {
                 rsv: 0,
@@ -88,5 +83,18 @@ impl UdpSend for UdpSocksWrap {
             let buf_ref: &[u8] = &buf;
             Ok(self.socket.send_to(buf_ref, socket_addr).await?)
         }
+    }
+}
+
+#[async_trait]
+impl UdpRecv for UdpSocksWrap {
+    async fn recv_from(&mut self) -> Result<(Bytes, SocksAddr), SError> {
+        self.recv_from().await
+    }
+}
+#[async_trait]
+impl UdpSend for UdpSocksWrap {
+    async fn send_to(&self, buf: Bytes, addr: SocksAddr) -> Result<usize, SError> {
+        self.send_to(buf, addr).await
     }
 }

@@ -1,6 +1,9 @@
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::sync::Arc;
 
+use bytes::Bytes;
+use tokio::sync::mpsc::channel;
+
 use crate::config::{AuthUser, SocksServerCfg};
 use crate::error::SError;
 use crate::msgs::socks5::{
@@ -192,10 +195,42 @@ impl Inbound for SocksServer {
                 } else {
                     None
                 };
+
                 let socket = Arc::new(socket.unwrap());
+                let (local_send, mut local_recv) = channel::<(Bytes, socks5::SocksAddr)>(512);
+                let (local_send2, mut local_recv2) = channel::<(Bytes, socks5::SocksAddr)>(512);
+                let socket1 = socket.clone();
+                let socket2 = socket.clone();
+
+                tokio::spawn(async move {
+                    let mut wrap = UdpSocksWrap::new(socket1, true);
+                    loop {
+                        let (buf, addr) = match local_recv.recv().await {
+                            Some(d) => d,
+                            None => break,
+                        };
+                        let _ = wrap.send_to(buf, addr).await;
+                    }
+                });
+
+                tokio::spawn(async move {
+                    let mut wrap = UdpSocksWrap::new(socket2, true);
+                    loop {
+                        let result = wrap.recv_from().await;
+                        match result {
+                            Ok((buf, addr)) => {
+                                if local_send2.send((buf, addr)).await.is_err() {
+                                    break;
+                                }
+                            }
+                            Err(_) => break,
+                        }
+                    }
+                });
+
                 Ok(ProxyRequest::Udp(UdpSession {
-                    send: Arc::new(UdpSocksWrap::new(socket.clone(), true)),
-                    recv: Box::new(UdpSocksWrap::new(socket, true)),
+                    send: Arc::new(local_send),
+                    recv: Box::new(local_recv2),
                     bind_addr: req.dst,
                     stream: Some(Box::new(s)),
                     session_id,
