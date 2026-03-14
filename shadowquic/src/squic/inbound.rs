@@ -8,7 +8,7 @@ use tokio::{
     select,
     sync::mpsc::{Sender, channel},
 };
-use tracing::{Instrument, Level, event, info, trace, trace_span};
+use tracing::{error, info, warn, Instrument, Level, event, trace, trace_span};
 
 use crate::{
     ProxyRequest, TcpSession, TcpTrait, UdpSession,
@@ -196,11 +196,14 @@ impl<C: QuicConnection> SQServerConn<C> {
             Frame::UdpAssociate(req) => {
                 wait_sunny_auth(&inner).await?;
                 let dst = req.dst.unwrap_or_else(SocksAddr::unspecified);
+                info!("ShadowQUIC server: received UDP ASSOCIATE, dst: {}", dst);
                 info!("association request to {} accepted", dst);
 
                 // Use larger channel buffer for better throughput
                 let (local_send, udp_recv) = channel::<(Bytes, SocksAddr)>(512);
                 let (udp_send, local_recv) = channel::<(Bytes, SocksAddr)>(512);
+                info!("ShadowQUIC server: created UDP channels");
+                
                 let udp: UdpSession = UdpSession {
                     send: Arc::new(udp_send),
                     recv: Box::new(udp_recv),
@@ -211,13 +214,18 @@ impl<C: QuicConnection> SQServerConn<C> {
                 let local_send = Arc::new(local_send);
                 let over_stream = true; // 新协议统一使用流模式
 
+                info!("ShadowQUIC server: sending UDP request to outbound...");
                 if req_send.send(ProxyRequest::Udp(udp)).await.is_err() {
+                    error!("ShadowQUIC server: failed to send UDP request to outbound");
                     return Err(SError::OutboundUnavailable)?;
                 }
+                info!("ShadowQUIC server: UDP request sent to outbound");
 
+                info!("ShadowQUIC server: starting UDP relay tasks...");
                 let fut1 = handle_udp_send(send, Box::new(local_recv), inner.clone(), over_stream);
                 let fut2 = handle_udp_recv_ctrl(recv, local_send, inner);
                 tokio::try_join!(fut1, fut2)?;
+                info!("ShadowQUIC server: UDP relay finished");
             }
             _ => {
                 tracing::warn!("unknown frame type received");

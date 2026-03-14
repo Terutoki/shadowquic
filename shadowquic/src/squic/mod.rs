@@ -16,7 +16,7 @@ use tokio::{
         watch::{Receiver, Sender, channel},
     },
 };
-use tracing::{Instrument, Level, debug, error, event, info, trace};
+use tracing::{debug, error, info, warn, Instrument, Level, event, trace};
 
 use crate::arena::{packet_buf_large, packet_buf_sized};
 use crate::utils::lock_free_ring::LockFreeRingBuffer;
@@ -210,18 +210,21 @@ pub async fn handle_udp_send<C: QuicConnection>(
     loop {
         info!("handle_udp_send: waiting for data from downstream...");
         let (bytes, dst) = down_stream.recv_from().await?;
-        info!("handle_udp_send: got {} bytes to {}", bytes.len(), dst);
+        info!("handle_udp_send: got {} bytes to {}, sending to upstream...", bytes.len(), dst);
         STATS.packet_sent(bytes.len());
 
         let (id, is_new) = session.get_id_or_insert(&dst).await;
 
         // Send UDP data using new protocol
         if over_stream {
+            info!("handle_udp_send: using stream mode, is_new: {}", is_new);
             use std::collections::hash_map::Entry;
             let uni_conn = match session.unistream_map.entry(dst.clone()) {
                 Entry::Occupied(e) => e.into_mut(),
                 Entry::Vacant(e) => {
+                    info!("handle_udp_send: opening new unidirectional stream");
                     let (uni, _id) = conn.open_uni().await?;
+                    info!("handle_udp_send: unidirectional stream opened");
                     e.insert(uni)
                 }
             };
@@ -236,7 +239,9 @@ pub async fn handle_udp_send<C: QuicConnection>(
             };
             let mut frame = Frame::UdpData(udp_data);
             frame.encode_sync(&mut header_buf);
+            info!("handle_udp_send: writing {} bytes to unidirectional stream", header_buf.len());
             uni_conn.write_all(&header_buf).await?;
+            info!("handle_udp_send: written to unidirectional stream");
         } else {
             // Datagram path - use new UdpData frame
             let mut frame_buf = BytesMut::new();
@@ -246,8 +251,10 @@ pub async fn handle_udp_send<C: QuicConnection>(
                 payload: bytes,
             };
             Frame::UdpData(udp_data).encode_sync(&mut frame_buf);
+            info!("handle_udp_send: sending {} bytes via datagram", frame_buf.len());
 
             quic_conn.send_datagram(frame_buf.freeze()).await?;
+            info!("handle_udp_send: datagram sent");
         }
     }
 }
@@ -277,6 +284,7 @@ pub async fn handle_udp_recv_ctrl<C: QuicConnection>(
 
                 if let Some(ref dst) = dst {
                     let id = rand::random::<u16>();
+                    info!("handle_udp_recv_ctrl: received UDP data, dst: {}, id: {}", dst, id);
                     trace!("udp data received with dst: {}, assigning id:{}", dst, id);
                     session
                         .store_socket(id, dst.clone(), udp_socket.clone())
@@ -284,13 +292,17 @@ pub async fn handle_udp_recv_ctrl<C: QuicConnection>(
 
                     // 发送UDP数据到channel (UdpSession.recv)
                     // dst是目标地址，payload是数据
+                    info!("handle_udp_recv_ctrl: sending {} bytes to channel, dst: {}", udp_data.payload.len(), dst);
                     let _ = udp_socket.send_to(udp_data.payload, dst.clone()).await;
+                    info!("handle_udp_recv_ctrl: sent to channel");
                 } else {
                     // 没有目标地址的UDP数据（不应该出现）
+                    warn!("handle_udp_recv_ctrl: UDP data received without dst!");
                     trace!("udp data received without dst");
                 }
             }
             Frame::Fin => {
+                info!("handle_udp_recv_ctrl: received Fin frame, closing");
                 trace!("UDP session finished");
                 break;
             }
