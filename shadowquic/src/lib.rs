@@ -112,7 +112,10 @@ impl UdpSend for Sender<(Bytes, SocksAddr)> {
 #[async_trait]
 impl UdpRecv for Receiver<(Bytes, SocksAddr)> {
     async fn recv_from(&mut self) -> Result<(Bytes, SocksAddr), SError> {
-        let r = self.recv().await.ok_or(SError::OutboundUnavailable)?;
+        let r = self.recv().await.ok_or_else(|| {
+            tracing::warn!("UDP channel closed, returning OutboundUnavailable");
+            SError::OutboundUnavailable
+        })?;
         Ok(r)
     }
 }
