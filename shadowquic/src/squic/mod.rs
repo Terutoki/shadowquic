@@ -3,6 +3,7 @@ use std::{
     mem::replace,
     ops::Deref,
     sync::Arc,
+    sync::atomic::{AtomicU16, Ordering},
     time::Duration,
 };
 
@@ -34,23 +35,23 @@ use crate::{
     quic::{QuicConnection, STATS},
 };
 
-mod id_store_optimized;
+pub mod id_store_optimized;
 pub mod inbound;
 pub mod outbound;
 
-pub use id_store_optimized::LockFreeIdTable;
+pub use id_store_optimized::{LockFreeIdTable, UdpIdStore};
 pub use self::inbound::SunnyQuicUsers;
 
 /// SQuic connection, it is shared by sunnyquic and shadowquic and is a wrapper of quic connection.
 /// It contains a connection object and two ID store for managing UDP sockets.
-/// The IDStore stores the mapping between ids and the destination addresses as well as associated sockets
+/// Now uses lock-free UdpIdStore instead of lock-based IDStore for better performance
 #[derive(Clone)]
 pub struct SQConn<T: QuicConnection> {
     pub(crate) conn: T,
     pub(crate) authed: Arc<SetOnce<bool>>,
     pub(crate) auth_token: Arc<SetOnce<[u8; 64]>>,  // 0-RTT auth token
-    pub(crate) send_id_store: IDStore<()>,
-    pub(crate) recv_id_store: IDStore<(AnyUdpSend, SocksAddr)>,
+    pub(crate) send_id_counter: Arc<AtomicU16>,  // Lock-free ID counter
+    pub(crate) recv_id_store: Arc<UdpIdStore>,    // Lock-free UDP socket store
     pub(crate) lock_free_id_table: Arc<LockFreeIdTable>,
 }
 
@@ -209,9 +210,9 @@ where
 /// AssociateSendSession is a session for sending UDP packets.
 /// It is created for each association task
 /// The local dst_map works as a inverse map from destination to id
-/// When session ended, the ids created by this session will be removed from the IDStore.
+/// Now uses lock-free AtomicU16 counter instead of lock-based IDStore
 struct AssociateSendSession<W: AsyncWrite> {
-    id_store: IDStore<()>,
+    id_counter: Arc<AtomicU16>,
     dst_map: FxHashMap<SocksAddr, u16>,
     unistream_map: FxHashMap<SocksAddr, W>,
 }
@@ -221,10 +222,7 @@ impl<W: AsyncWrite> AssociateSendSession<W> {
         match self.dst_map.entry(addr.clone()) {
             Entry::Occupied(e) => (*e.get(), false),
             Entry::Vacant(e) => {
-                // Use simple counter for ID generation
-                static COUNTER: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(1);
-                let id = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                self.id_store.inner.write().await.insert(id, Ok(()));
+                let id = self.id_counter.fetch_add(1, Ordering::Relaxed);
                 e.insert(id);
                 trace!("send session: insert id:{}, addr:{}", id, addr);
                 (id, true)
@@ -235,44 +233,24 @@ impl<W: AsyncWrite> AssociateSendSession<W> {
 
 impl<W: AsyncWrite> Drop for AssociateSendSession<W> {
     fn drop(&mut self) {
-        let id_store = self.id_store.inner.clone();
-        let id_remove: Vec<u16> = self.dst_map.values().copied().collect();
-        tokio::spawn(
-            async move {
-                let mut id_store = id_store.write().await;
-                let len = id_store.len();
-                for k in &id_remove {
-                    id_store.remove(k);
-                }
-                let decrease = len - id_store.len();
-                event!(
-                    Level::TRACE,
-                    "AssociateSendSession dropped, session id size:{}, {} ids cleaned",
-                    id_remove.len(),
-                    decrease
-                );
-            }
-            .in_current_span(),
-        );
+        // No global cleanup needed - IDs are tracked locally in dst_map
+        trace!("AssociateSendSession dropped, {} ids cleaned", self.dst_map.len());
     }
 }
 
 /// AssociateRecvSession is a session for receiving UDP ctrl stream.
 /// It is created for each association task
-/// There are two usages for id_map
-/// First, it works as local cache avoiding using global store repeatedly which is more expensive
-/// Second. it records ids created by this session and clean those ids when session ended.
+/// Now uses lock-free UdpIdStore instead of lock-based IDStore
 struct AssociateRecvSession {
-    id_store: IDStore<(AnyUdpSend, SocksAddr)>,
+    id_store: Arc<UdpIdStore>,
     id_map: FxHashMap<u16, SocksAddr>,
     lock_free_table: Arc<LockFreeIdTable>,
 }
 impl AssociateRecvSession {
     pub async fn store_socket(&mut self, id: u16, dst: SocksAddr, socks: AnyUdpSend) {
         if let hash_map::Entry::Vacant(e) = self.id_map.entry(id) {
-            self.id_store
-                .store_socket(id, (socks.clone(), dst.clone()))
-                .await;
+            // Use lock-free UdpIdStore
+            let _ = self.id_store.insert(id, socks.clone(), dst.clone());
             // Also insert into lock-free table for fast path
             self.lock_free_table.insert(id, socks, dst.clone());
             trace!("recv session: insert id:{}, addr:{}", id, dst);
@@ -283,26 +261,12 @@ impl AssociateRecvSession {
 
 impl Drop for AssociateRecvSession {
     fn drop(&mut self) {
-        let id_store = self.id_store.inner.clone();
-        let id_remove: Vec<u16> = self.id_map.keys().copied().collect();
-        tokio::spawn(
-            async move {
-                let mut id_store = id_store.write().await;
-                let len = id_store.len();
-
-                for k in &id_remove {
-                    id_store.remove(k);
-                }
-                let decrease = len - id_store.len();
-                event!(
-                    Level::TRACE,
-                    "AssociateRecvSession dropped, session id size:{}, {} ids cleaned",
-                    id_remove.len(),
-                    decrease
-                );
-            }
-            .in_current_span(),
-        );
+        // Clean up using lock-free table
+        for id in self.id_map.keys() {
+            self.id_store.remove(*id);
+            self.lock_free_table.remove(*id);
+        }
+        trace!("AssociateRecvSession dropped, {} ids cleaned", self.id_map.len());
     }
 }
 
@@ -316,7 +280,7 @@ pub async fn handle_udp_send<C: QuicConnection>(
 ) -> Result<(), SError> {
     let mut down_stream = udp_recv;
     let mut session = AssociateSendSession {
-        id_store: conn.send_id_store.clone(),
+        id_counter: conn.send_id_counter.clone(),
         dst_map: HashMap::with_capacity_and_hasher(16, FxBuildHasher),
         unistream_map: HashMap::with_capacity_and_hasher(16, FxBuildHasher),
     };
@@ -447,32 +411,18 @@ pub async fn handle_udp_packet_recv<C: QuicConnection>(conn: SQConn<C>) -> Resul
                     continue;
                 }
 
-                // SLOW PATH: Fall back to async HashMap lookup
-                match id_store.get_socket_or_notify(id).await {
+                // SLOW PATH: Use lock-free UdpIdStore
+                match id_store.get_or_create(id).await {
                  Ok((udp, addr)) =>  {
                      // Also insert into lock-free table for future fast path
                      lock_free_table.insert(id, udp.clone(), addr.clone());
                      udp.send_to(payload, addr).await?;
                  }
-                 Err(mut notify) =>  {
-                     let id_store = id_store.clone();
-                     let lock_free_table = lock_free_table.clone();
-                     let src_addr = conn.remote_address();
-                     event!(Level::TRACE, "resolving datagram id:{}",id);
-                     let payload = b;
-                     tokio::spawn(async move {
-                         let _ = notify.changed().await.map_err(|_|debug!("id:{} notifier dropped",id));
-                         if let Some((udp, addr)) = id_store.try_get_socket(id).await {
-                             // Insert into lock-free table for future fast path
-                             lock_free_table.insert(id, udp.clone(), addr.clone());
-                             info!("udp over datagram: id:{}: {}->{}",id, src_addr, addr);
-                             let payload = payload.slice(2..);
-                             let _ = udp.send_to(payload, addr).await.map_err(|x|error!("{}",x));
-                         }
-                         Ok(()) as Result<(), SError>
-                      }.in_current_span());
+                 Err(_) =>  {
+                     // Session closed, ignore
+                     trace!("id:{} session not found", id);
                  }
-            }
+                }
             }
 
             r = async {
@@ -494,13 +444,22 @@ pub async fn handle_udp_packet_recv<C: QuicConnection>(conn: SQConn<C>) -> Resul
                 
                 event!(Level::TRACE, "resolving datagram id:{}",id);
 
-                let (udp,addr) = id_store.get_socket_or_wait(id).await?;
-
-                info!("udp over stream: id:{}: {}->{}",id, conn.remote_address(), addr);
-                Ok((uni_stream,Some(udp.clone()),Some(addr.clone()))) as Result<(C::RecvStream,Option<AnyUdpSend>,Option<SocksAddr>),SError>
+                // Use lock-free UdpIdStore
+                let result = id_store.get_or_create(id).await;
+                
+                match result {
+                    Ok((udp, addr)) => {
+                        info!("udp over stream: id:{}: {}->{}",id, conn.remote_address(), addr);
+                        Ok((uni_stream, Some(udp), Some(addr))) as Result<_, SError>
+                    }
+                    Err(_) => {
+                        trace!("id:{} session not found, skipping", id);
+                        Err(SError::UDPSessionClosed("session not found".into()))
+                    }
+                }
             } => {
 
-                let  (mut uni_stream,udp,addr) = match r {
+                let (mut uni_stream, udp, addr): (C::RecvStream, Option<AnyUdpSend>, Option<SocksAddr>) = match r {
                     Ok(r) => r,
                     Err(SError::UDPSessionClosed(_)) => {
                         continue;

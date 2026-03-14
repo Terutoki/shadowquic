@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use std::{
     net::{ToSocketAddrs, UdpSocket},
     sync::Arc,
+    sync::atomic::AtomicU16,
 };
 use tokio::sync::{OnceCell, SetOnce};
 
@@ -13,7 +14,7 @@ use crate::{
     squic::outbound::handle_request,
 };
 
-use crate::squic::{IDStore, LockFreeIdTable, SQConn, handle_udp_packet_recv};
+use crate::squic::{id_store_optimized::UdpIdStore, LockFreeIdTable, SQConn, handle_udp_packet_recv};
 
 pub type ShadowQuicConn = SQConn<<EndClient as QuicClient>::C>;
 
@@ -68,8 +69,8 @@ impl ShadowQuicClient {
             conn,
             authed: Arc::new(SetOnce::new_with(Some(true))),
             auth_token: Arc::new(SetOnce::new_with(None)),
-            send_id_store: IDStore::default(),
-            recv_id_store: IDStore::default(),
+            send_id_counter: Arc::new(AtomicU16::new(1)),
+            recv_id_store: Arc::new(UdpIdStore::new()),
             lock_free_id_table: Arc::new(LockFreeIdTable::new(1024)),
         };
 

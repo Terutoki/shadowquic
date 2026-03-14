@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use std::{
     net::{ToSocketAddrs, UdpSocket},
     sync::Arc,
+    sync::atomic::AtomicU16,
 };
 use tokio::sync::{OnceCell, SetOnce};
 
@@ -17,7 +18,7 @@ use crate::{
     sunnyquic::gen_sunny_user_hash,
 };
 
-use crate::squic::{IDStore, LockFreeIdTable, SQConn, handle_udp_packet_recv};
+use crate::squic::{id_store_optimized::UdpIdStore, LockFreeIdTable, SQConn, handle_udp_packet_recv};
 
 pub type SunnyQuicConn = SQConn<<EndClient as QuicClient>::C>;
 
@@ -73,8 +74,8 @@ impl SunnyQuicClient {
             conn,
             authed: Arc::new(SetOnce::new()),
             auth_token: Arc::new(SetOnce::new_with(Some(user_hash))),  // 0-RTT: store token
-            send_id_store: Default::default(),
-            recv_id_store: IDStore::default(),
+            send_id_counter: Arc::new(AtomicU16::new(1)),
+            recv_id_store: Arc::new(UdpIdStore::new()),
             lock_free_id_table: Arc::new(LockFreeIdTable::new(1024)),
         };
 

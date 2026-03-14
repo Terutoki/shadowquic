@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU16;
 
 use tokio::sync::{
     SetOnce,
@@ -12,7 +13,7 @@ use crate::{
     squic::inbound::SQServerConn,
 };
 
-use crate::squic::{IDStore, LockFreeIdTable, SQConn};
+use crate::squic::{id_store_optimized::UdpIdStore, LockFreeIdTable, SQConn};
 
 use super::quinn_wrapper::EndServer;
 use crate::quic::QuicServer;
@@ -42,8 +43,8 @@ impl ShadowQuicServer {
                 conn: incom,
                 authed: Arc::new(SetOnce::new_with(Some(true))),
                 auth_token: Arc::new(SetOnce::new_with(None)),
-                send_id_store: Default::default(),
-                recv_id_store: IDStore::default(),
+                send_id_counter: Arc::new(AtomicU16::new(1)),
+                recv_id_store: Arc::new(UdpIdStore::new()),
                 lock_free_id_table: Arc::new(LockFreeIdTable::new(1024)),
             },
             users: Arc::new(Default::default()),

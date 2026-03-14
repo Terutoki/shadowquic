@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU16;
 
 use rustc_hash::FxHashMap;
 use tokio::sync::{
@@ -17,7 +18,7 @@ use crate::{
     sunnyquic::EndServer,
 };
 
-use crate::squic::{IDStore, LockFreeIdTable, SQConn};
+use crate::squic::{id_store_optimized::UdpIdStore, LockFreeIdTable, SQConn};
 
 use crate::quic::QuicServer;
 pub struct SunnyQuicServer {
@@ -47,8 +48,8 @@ impl SunnyQuicServer {
                 conn: incom,
                 authed: Arc::new(SetOnce::new()),
                 auth_token: Arc::new(SetOnce::new()),
-                send_id_store: Default::default(),
-                recv_id_store: IDStore::default(),
+                send_id_counter: Arc::new(AtomicU16::new(1)),
+                recv_id_store: Arc::new(UdpIdStore::new()),
                 lock_free_id_table: Arc::new(LockFreeIdTable::new(1024)),
             },
             users: user_hash,
