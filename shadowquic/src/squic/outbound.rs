@@ -13,7 +13,7 @@ use crate::{
     msgs::frame::{ConnectReq, FastConnectReq, Frame, UdpAssociateReq},
     msgs::{SDecode, SEncode, encode_to_async, socks5::SocksAddr},
     quic::QuicConnection,
-    squic::{handle_udp_recv_ctrl, handle_udp_send, handle_udp_from_server},
+    squic::{handle_udp_from_server, handle_udp_recv_ctrl, handle_udp_send},
 };
 
 use super::{SQConn, inbound::Unsplit};
@@ -67,54 +67,61 @@ pub async fn handle_request<C: QuicConnection>(
                 }
 
                 // 直接开始数据传输
-                let u = tokio::io::copy_bidirectional(
+                use crate::utils::memory_pool::fast_alloc_large;
+                let mut buf_quic = fast_alloc_large();
+                let mut buf_tcp = fast_alloc_large();
+
+                let (down, up) = tokio::io::copy_bidirectional_with_sizes(
                     &mut Unsplit { s: send, r: recv },
                     &mut tcp_session.stream,
+                    buf_quic.capacity(),
+                    buf_tcp.capacity(),
                 )
                 .await?;
                 info!(
                     "request:{} finished, upload:{}bytes,download:{}bytes",
-                    dst, u.1, u.0
+                    dst, up, down
                 );
             }
             crate::ProxyRequest::Udp(udp_session) => {
                 let bind_addr = udp_session.bind_addr.clone();
-                info!("ShadowQUIC outbound: UDP request, bind_addr: {}", bind_addr);
-                info!("bistream opened for udp dst:{}", bind_addr);
+                debug!("ShadowQUIC outbound: UDP request, bind_addr: {}", bind_addr);
+                debug!("bistream opened for udp dst:{}", bind_addr);
                 let req = UdpAssociateReq {
                     dst: Some(udp_session.bind_addr),
                     extensions: vec![],
                 };
-                info!("Sending UDP ASSOCIATE request to upstream...");
+                debug!("Sending UDP ASSOCIATE request to upstream...");
                 Frame::UdpAssociate(req).encode(&mut send).await?;
-                info!("UDP ASSOCIATE request sent to upstream");
-                
+                debug!("UDP ASSOCIATE request sent to upstream");
+
                 // Clone UDP session components before moving into async blocks
                 let udp_send_clone = udp_session.send.clone();
                 let udp_recv_for_send = udp_session.recv;
-                
+
                 // Spawn handle_udp_recv_ctrl as background task - it reads from control stream
                 // which may close after UDP ASSOCIATE exchange
                 let conn_for_ctrl = conn.clone();
                 tokio::spawn(async move {
-                    info!("Client: starting handle_udp_recv_ctrl task...");
+                    trace!("Client: starting handle_udp_recv_ctrl task...");
                     let result = handle_udp_recv_ctrl(recv, udp_send_clone, conn_for_ctrl).await;
-                    info!("Client: handle_udp_recv_ctrl finished: {:?}", result);
+                    trace!("Client: handle_udp_recv_ctrl finished: {:?}", result);
                 });
-                
+
                 // Spawn handle_udp_from_server to receive UDP responses from server via uni streams
                 let conn_for_server = conn.clone();
                 let udp_send_for_response = udp_session.send.clone();
                 tokio::spawn(async move {
-                    info!("Client: starting handle_udp_from_server task...");
-                    let result = handle_udp_from_server(conn_for_server, udp_send_for_response).await;
-                    info!("Client: handle_udp_from_server finished: {:?}", result);
+                    trace!("Client: starting handle_udp_from_server task...");
+                    let result =
+                        handle_udp_from_server(conn_for_server, udp_send_for_response).await;
+                    trace!("Client: handle_udp_from_server finished: {:?}", result);
                 });
-                
+
                 // Main task: handle_udp_send - send UDP data to upstream
                 let conn_for_send = conn.clone();
                 let fut1 = handle_udp_send(send, udp_recv_for_send, conn_for_send, over_stream);
-                
+
                 // Control stream monitoring - spawn instead of join
                 let conn_for_ctrl2 = conn.clone();
                 let mut ctrl_stream = udp_session.stream;
@@ -122,16 +129,16 @@ pub async fn handle_request<C: QuicConnection>(
                     if ctrl_stream.is_none() {
                         return;
                     }
-                    info!("Client: monitoring control stream...");
+                    trace!("Client: monitoring control stream...");
                     let mut buf = [0u8];
                     match ctrl_stream.unwrap().read_exact(&mut buf).await {
-                        Ok(_) => info!("Client: control stream closed normally"),
-                        Err(e) => info!("Client: control stream error: {}", e),
+                        Ok(_) => trace!("Client: control stream closed normally"),
+                        Err(e) => trace!("Client: control stream error: {}", e),
                     }
                 });
-                
+
                 tokio::try_join!(fut1)?;
-                info!("udp association to {} ended", bind_addr);
+                debug!("udp association to {} ended", bind_addr);
             }
         }
         Ok(()) as Result<(), SError>

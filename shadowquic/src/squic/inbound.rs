@@ -8,7 +8,7 @@ use tokio::{
     select,
     sync::mpsc::{Sender, channel},
 };
-use tracing::{error, info, warn, Instrument, Level, event, trace, trace_span};
+use tracing::{Instrument, debug, error, info, trace, trace_span};
 
 use crate::{
     ProxyRequest, TcpSession, TcpTrait, UdpSession,
@@ -22,7 +22,7 @@ use crate::{
     squic::wait_sunny_auth,
 };
 
-use super::{SQConn, handle_udp_relay_to_outbound, handle_udp_recv_ctrl, handle_udp_send};
+use super::{SQConn, handle_udp_recv_ctrl, handle_udp_relay_to_outbound, handle_udp_send};
 
 pub type SunnyQuicUsers = Arc<FxHashMap<[u8; 64], String>>;
 
@@ -34,17 +34,15 @@ pub struct SQServerConn<C: QuicConnection> {
 impl<C: QuicConnection> SQServerConn<C> {
     pub async fn handle_connection(self, req_send: Sender<ProxyRequest>) -> Result<(), SError> {
         let conn = &self.inner;
-        event!(
-            Level::INFO,
-            "incoming from {} accepted",
-            conn.remote_address()
-        );
+        debug!("incoming from {} accepted", conn.remote_address());
 
         // Spawn UDP relay handler - handles uni stream -> DirectOut
         let conn_clone = self.inner.clone();
         let req_send_clone = req_send.clone();
         tokio::spawn(async move {
-            let _ = handle_udp_relay_to_outbound(conn_clone, req_send_clone).in_current_span().await;
+            let _ = handle_udp_relay_to_outbound(conn_clone, req_send_clone)
+                .in_current_span()
+                .await;
         });
 
         while conn.close_reason().is_none() {
@@ -197,8 +195,8 @@ impl<C: QuicConnection> SQServerConn<C> {
             Frame::UdpAssociate(req) => {
                 wait_sunny_auth(&inner).await?;
                 let dst = req.dst.unwrap_or_else(SocksAddr::unspecified);
-                info!("ShadowQUIC server: received UDP ASSOCIATE, dst: {}", dst);
-                info!("association request to {} accepted", dst);
+                debug!("ShadowQUIC server: received UDP ASSOCIATE, dst: {}", dst);
+                debug!("association request to {} accepted", dst);
 
                 // Clone inner for async tasks
                 let inner_for_ctrl = inner.clone();
@@ -207,14 +205,16 @@ impl<C: QuicConnection> SQServerConn<C> {
                 // Use larger channel buffer for better throughput
                 let (local_send, udp_recv) = channel::<(Bytes, SocksAddr)>(512);
                 let (udp_send, local_recv) = channel::<(Bytes, SocksAddr)>(512);
-                info!("ShadowQUIC server: created UDP channels");
-                
+                debug!("ShadowQUIC server: created UDP channels");
+
                 // Store local_send in lock_free_id_table so handle_udp_relay_to_outbound can find it
                 // Sender already implements UdpSend (lib.rs:103)
                 let any_udp_send: crate::AnyUdpSend = Arc::new(local_send.clone());
-                inner.lock_free_id_table.insert(0u16, any_udp_send, dst.clone());
-                info!("ShadowQUIC server: stored UDP session in lock_free_id_table with id 0");
-                
+                inner
+                    .lock_free_id_table
+                    .insert(0u16, any_udp_send, dst.clone());
+                debug!("ShadowQUIC server: stored UDP session in lock_free_id_table with id 0");
+
                 let udp: UdpSession = UdpSession {
                     send: Arc::new(udp_send),
                     recv: Box::new(udp_recv),
@@ -230,15 +230,19 @@ impl<C: QuicConnection> SQServerConn<C> {
                     error!("ShadowQUIC server: failed to send UDP request to outbound");
                     return Err(SError::OutboundUnavailable)?;
                 }
-                info!("ShadowQUIC server: UDP request sent to outbound");
+                debug!("ShadowQUIC server: UDP request sent to outbound");
 
                 // Spawn task to forward client UDP data from bi stream to DirectOut
                 // This reads UDP packets that client sends via the bi stream
                 let local_send_for_ctrl = local_send.clone();
                 tokio::spawn(async move {
-                    info!("ShadowQUIC server: starting handle_udp_recv_ctrl task...");
-                    let result = handle_udp_recv_ctrl(recv, local_send_for_ctrl, inner_for_ctrl).await;
-                    info!("ShadowQUIC server: handle_udp_recv_ctrl finished: {:?}", result);
+                    trace!("ShadowQUIC server: starting handle_udp_recv_ctrl task...");
+                    let result =
+                        handle_udp_recv_ctrl(recv, local_send_for_ctrl, inner_for_ctrl).await;
+                    trace!(
+                        "ShadowQUIC server: handle_udp_recv_ctrl finished: {:?}",
+                        result
+                    );
                 });
 
                 // Spawn task to forward client UDP data from bi stream's send side to DirectOut
@@ -251,20 +255,22 @@ impl<C: QuicConnection> SQServerConn<C> {
                 // 2. DirectOut -> ??? -> client
                 // For path 2, DirectOut writes to udp_session.send (udp_send)
                 // We need to read from the channel and send back to client via bi stream
-                
+
                 // For now, let's just handle the forward path (client -> DirectOut)
                 // The return path will be handled by handle_udp_relay_to_outbound for uni streams
 
                 // Spawn handle_udp_send - this reads from local_recv and sends via uni stream to client
                 // This is for the return path: DirectOut -> server -> uni stream -> client
                 tokio::spawn(async move {
-                    info!("ShadowQUIC server: starting handle_udp_send task for return path...");
-                    let result = handle_udp_send(send, Box::new(local_recv), inner_for_send, over_stream).await;
-                    info!("ShadowQUIC server: handle_udp_send finished: {:?}", result);
+                    trace!("ShadowQUIC server: starting handle_udp_send task for return path...");
+                    let result =
+                        handle_udp_send(send, Box::new(local_recv), inner_for_send, over_stream)
+                            .await;
+                    trace!("ShadowQUIC server: handle_udp_send finished: {:?}", result);
                 });
 
                 // Return immediately - UDP relay is now running in background
-                info!("ShadowQUIC server: UDP relay started in background");
+                debug!("ShadowQUIC server: UDP relay started in background");
             }
             _ => {
                 tracing::warn!("unknown frame type received");

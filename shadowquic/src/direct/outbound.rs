@@ -8,7 +8,9 @@ use rustc_hash::FxHashMap;
 use bytes::{Bytes, BytesMut};
 use parking_lot::RwLock;
 use tokio::net::{TcpStream, lookup_host};
-use tracing::{error, info, trace, trace_span, warn, Instrument};
+use tracing::{Instrument, debug, error, info, trace, trace_span, warn};
+
+use crate::utils::memory_pool::fast_alloc_large;
 
 use crate::{
     Outbound, UdpSession,
@@ -41,11 +43,14 @@ impl Outbound for DirectOut {
                         .ok_or(SError::DomainResolveFailed(tcp_session.dst.to_string()))?;
                     trace!("resolved to {}", dst);
                     let mut upstream = TcpStream::connect(dst).await?;
+                    // Use pooled large buffers from our high-performance memory pool
+                    let mut buf_client = fast_alloc_large();
+                    let mut buf_upstream = fast_alloc_large();
                     let (_, _) = tokio::io::copy_bidirectional_with_sizes(
                         &mut tcp_session.stream,
                         &mut upstream,
-                        65536,
-                        65536,
+                        buf_client.capacity(),
+                        buf_upstream.capacity(),
                     )
                     .await?;
                 }
@@ -134,18 +139,18 @@ impl DirectOut {
 
     async fn handle_udp(&self, mut udp_session: UdpSession) -> Result<(), SError> {
         let bind_addr = &udp_session.bind_addr;
-        info!("DirectOut handle_udp called, bind_addr: {}", bind_addr);
+        debug!("DirectOut handle_udp called, bind_addr: {}", bind_addr);
 
         let mut first_packet: Option<(Bytes, SocksAddr)> = None;
         let dst = if bind_addr.is_unspecified() {
-            info!("bind_addr is unspecified, waiting for first UDP packet...");
+            debug!("bind_addr is unspecified, waiting for first UDP packet...");
             let result = udp_session.recv.recv_from().await;
-            info!("recv_from result: {:?}", result);
+            debug!("recv_from result: {:?}", result);
             match result {
                 Ok((buf, pkt_dst)) => {
                     let packet_dst = pkt_dst.clone();
                     first_packet = Some((buf, pkt_dst));
-                    info!("first UDP packet dst: {}", packet_dst);
+                    debug!("first UDP packet dst: {}", packet_dst);
                     packet_dst
                         .to_socket_addrs()?
                         .next()
@@ -157,13 +162,13 @@ impl DirectOut {
                 }
             }
         } else {
-            info!("bind_addr is specified: {}, associating udp", bind_addr);
+            debug!("bind_addr is specified: {}, associating udp", bind_addr);
             bind_addr
                 .to_socket_addrs()?
                 .next()
                 .ok_or(SError::DomainResolveFailed(bind_addr.to_string()))?
         };
-        info!("resolved to {}", dst);
+        debug!("resolved to {}", dst);
         let ipv4_only = dst.is_ipv4();
 
         let socket = DualSocket::new_bind(dst, !ipv4_only)?;

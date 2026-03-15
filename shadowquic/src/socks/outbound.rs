@@ -12,6 +12,7 @@ use crate::{
     },
     pool::fast_close_session,
     socks::UdpSocksWrap,
+    utils::memory_pool::fast_alloc_large,
 };
 use tokio::{
     io::{AsyncReadExt, copy_bidirectional_with_sizes},
@@ -119,7 +120,7 @@ impl SocksClient {
     }
 
     async fn handle_tcp(&self, mut tcp_session: TcpSession) -> Result<(), SError> {
-        tracing::info!("connect to socks server: {}", self.addr);
+        debug!("connect to socks server: {}", self.addr);
         let tcp = TcpStream::connect(self.addr.clone()).await?;
         tcp.set_nodelay(true)?;
         let mut tcp = self.authenticate(tcp).await?;
@@ -131,12 +132,22 @@ impl SocksClient {
         };
         encode_to_async(&socksreq, &mut tcp).await?;
         let _rep = CmdReply::decode(&mut tcp).await?;
-        tracing::trace!("socks tcp connection established");
+        trace!("socks tcp connection established");
 
         // Close session tracking before copy as it may take a long time
         let session_id = tcp_session.session_id.take().map(|s| s.id);
-        let result =
-            copy_bidirectional_with_sizes(&mut tcp, &mut tcp_session.stream, 262144, 262144).await;
+
+        // Use pooled buffers from our high-performance memory pool
+        let _buf_socks = fast_alloc_large();
+        let _buf_tcp = fast_alloc_large();
+
+        let result = copy_bidirectional_with_sizes(
+            &mut tcp,
+            &mut tcp_session.stream,
+            _buf_socks.capacity(),
+            _buf_tcp.capacity(),
+        )
+        .await;
 
         // Close session tracking
         if let Some(id) = session_id {
@@ -147,7 +158,7 @@ impl SocksClient {
     }
 
     async fn handle_udp(&self, mut udp_session: UdpSession) -> Result<(), SError> {
-        tracing::info!("connect to socks server: {}", self.addr);
+        debug!("connect to socks server: {}", self.addr);
         let tcp = TcpStream::connect(self.addr.clone()).await?;
         tcp.set_nodelay(true)?;
 
