@@ -8,7 +8,7 @@ use rustc_hash::FxHashMap;
 use bytes::{Bytes, BytesMut};
 use parking_lot::RwLock;
 use tokio::net::{TcpStream, lookup_host};
-use tracing::{Instrument, debug, error, info, trace, trace_span, warn};
+use tracing::{Instrument, debug, error, trace, trace_span};
 
 use crate::utils::memory_pool::fast_alloc_large;
 

@@ -7,16 +7,14 @@ use std::{
 use tokio::sync::{OnceCell, SetOnce};
 
 use super::quinn_wrapper::EndClient;
-use tracing::{error, info};
+use tracing::{debug, error};
 
 use crate::{
     Outbound, config::ShadowQuicClientCfg, error::SError, quic::QuicClient,
     squic::outbound::handle_request,
 };
 
-use crate::squic::{
-    LockFreeIdTable, SQConn, id_store_optimized::UdpIdStore,
-};
+use crate::squic::{LockFreeIdTable, SQConn, id_store_optimized::UdpIdStore};
 
 pub type ShadowQuicConn = SQConn<<EndClient as QuicClient>::C>;
 
@@ -82,7 +80,7 @@ impl ShadowQuicClient {
     async fn prepare_conn(&mut self) -> Result<(), SError> {
         self.quic_conn.take_if(|x| {
             x.close_reason().is_some_and(|x| {
-                info!("quic connection closed due to {}", x);
+                debug!("quic connection closed due to {}", x);
                 true
             })
         });

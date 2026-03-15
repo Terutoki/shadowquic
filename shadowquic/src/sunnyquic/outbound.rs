@@ -7,7 +7,7 @@ use std::{
 use tokio::sync::{OnceCell, SetOnce};
 
 use super::EndClient;
-use tracing::{error, info};
+use tracing::{debug, error};
 
 use crate::{
     Outbound,
@@ -18,9 +18,7 @@ use crate::{
     sunnyquic::gen_sunny_user_hash,
 };
 
-use crate::squic::{
-    LockFreeIdTable, SQConn, id_store_optimized::UdpIdStore,
-};
+use crate::squic::{LockFreeIdTable, SQConn, id_store_optimized::UdpIdStore};
 
 pub type SunnyQuicConn = SQConn<<EndClient as QuicClient>::C>;
 
@@ -95,7 +93,7 @@ impl SunnyQuicClient {
         // delete connection if closed.
         self.quic_conn.take_if(|x| {
             QuicConnection::close_reason(&x.conn).is_some_and(|x| {
-                info!("quic connection closed due to {}", x);
+                debug!("quic connection closed due to {}", x);
                 true
             })
         });

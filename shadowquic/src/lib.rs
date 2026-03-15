@@ -9,7 +9,7 @@ use tokio::net::TcpStream;
 use anyhow::Result;
 use async_trait::async_trait;
 use tokio::sync::mpsc::{Receiver, Sender};
-use tracing::{error, info, warn};
+use tracing::error;
 
 pub mod config;
 pub mod direct;
@@ -118,7 +118,9 @@ impl UdpRecv for Receiver<(Bytes, SocksAddr)> {
         match r {
             Some(data) => Ok(data),
             None => {
-                tracing::warn!("UDP channel closed (recv returned None), returning OutboundUnavailable");
+                tracing::warn!(
+                    "UDP channel closed (recv returned None), returning OutboundUnavailable"
+                );
                 Err(SError::OutboundUnavailable)
             }
         }

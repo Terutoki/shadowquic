@@ -19,7 +19,7 @@ use crate::{Inbound, ProxyRequest, TcpSession, UdpSession};
 use async_trait::async_trait;
 use socket2::{Domain, Protocol, Socket, Type};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
-use tracing::{Instrument, debug, error, info, trace, trace_span, warn};
+use tracing::{Instrument, debug, trace, trace_span, warn};
 
 use anyhow::Result;
 
